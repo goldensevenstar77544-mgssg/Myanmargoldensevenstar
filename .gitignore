@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
 /.pnp
@@ -19,19 +17,40 @@
 
 # production
 /build
+/dist
 
 # misc
 .DS_Store
+Thumbs.db
 *.pem
+*.p12
+*.key
 
-# debug
+# debug / logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
-# env files (can opt-in for committing if needed)
-.env*
+# env & secrets — keep example templates tracked
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.local.example
+
+# Firebase Admin / Google service account keys
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+firebase-adminsdk*.json
+
+# Firebase CLI local state
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+pubsub-debug.log
 
 # vercel
 .vercel
@@ -39,3 +58,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# editors / local tooling
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# local data dumps (financial workbooks, ad-hoc exports)
+*.xlsx
+*.xls
+
+# caches
+.turbo
+.cache

@@ -1,0 +1,204 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return signedIn() && userDoc().role == role;
+    }
+
+    function isChecker() {
+      return hasRole('checker');
+    }
+
+    function isMaker() {
+      return hasRole('maker');
+    }
+
+    function isApprover() {
+      return hasRole('approver');
+    }
+
+    function isFinanceStaff() {
+      return isChecker() || isApprover();
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isChecker() || isApprover());
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.email is string
+        && request.resource.data.keys().hasAll(['email', 'displayName', 'role', 'createdAt'])
+        && request.resource.data.role == null;
+      allow update: if signedIn() && (
+        (
+          isFinanceStaff()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'displayName'])
+        )
+        || (
+          request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mustChangePassword'])
+          && request.resource.data.mustChangePassword == false
+        )
+      );
+    }
+
+    match /businesses/{businessId} {
+      allow read: if signedIn();
+      allow create, update: if isFinanceStaff()
+        && request.resource.data.name is string
+        && request.resource.data.code is string
+        && request.resource.data.status in ['active', 'inactive'];
+      allow delete: if false;
+
+      match /fixedAssets/{assetId} {
+        allow read: if signedIn();
+        allow create, update: if isFinanceStaff()
+          && request.resource.data.name is string
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.date is string;
+        allow delete: if isFinanceStaff();
+      }
+    }
+
+    match /accounts/{accountId} {
+      allow read: if signedIn();
+      allow create: if isFinanceStaff()
+        && request.resource.data.type in ['bank', 'cash']
+        && request.resource.data.currency == 'MMK'
+        && request.resource.data.openingBalance is number
+        && request.resource.data.currentBalance == request.resource.data.openingBalance
+        && request.resource.data.status in ['active', 'inactive'];
+      allow update: if signedIn() && (
+        isFinanceStaff()
+        || (
+          isMaker()
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['pendingCount', 'updatedAt'])
+        )
+      );
+      allow delete: if false;
+    }
+
+    match /counters/{counterId} {
+      allow read, create, update: if signedIn() && (isMaker() || isFinanceStaff());
+      allow delete: if false;
+    }
+
+    match /transactions/{txId} {
+      allow read: if isFinanceStaff()
+        || (signedIn() && resource.data.makerId == request.auth.uid);
+
+      allow create: if signedIn()
+        && (isMaker() || isFinanceStaff())
+        && request.resource.data.makerId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.direction in ['income', 'expense']
+        && request.resource.data.displayId is string;
+
+      allow update: if signedIn() && (
+        // Maker/owner edits pending fields (not status to approved)
+        (
+          resource.data.makerId == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'pending'
+          && request.resource.data.makerId == resource.data.makerId
+          && request.resource.data.displayId == resource.data.displayId
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+        )
+        // Approver reject
+        || (
+          isApprover()
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'rejected'
+          && request.resource.data.approverId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'approverId', 'approverName', 'rejectionReason', 'rejectedAt', 'updatedAt'])
+        )
+        // Approver approve (balance update in same client txn)
+        || (
+          isApprover()
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'approved'
+          && request.resource.data.approverId == request.auth.uid
+          && request.resource.data.amount == resource.data.amount
+          && request.resource.data.direction == resource.data.direction
+          && request.resource.data.accountId == resource.data.accountId
+          && request.resource.data.displayId == resource.data.displayId
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'approverId', 'approverName', 'approvedAt', 'updatedAt'])
+        )
+        // Checker or Approver can edit pending
+        || (
+          isFinanceStaff()
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'pending'
+          && request.resource.data.makerId == resource.data.makerId
+          && request.resource.data.displayId == resource.data.displayId
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    match /auditLogs/{id} {
+      allow read: if isFinanceStaff();
+      allow create: if signedIn()
+        && request.resource.data.actorId == request.auth.uid
+        && request.resource.data.entityType in ['transaction', 'user']
+        && request.resource.data.action in ['created', 'updated', 'approved', 'rejected'];
+      allow update, delete: if false;
+    }
+
+    match /summaries/group {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn() && (
+        isFinanceStaff()
+        || request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['pendingCount', 'updatedAt'])
+      );
+    }
+
+    match /summaries/group/months/{monthId} {
+      allow read: if signedIn();
+      allow create, update: if isFinanceStaff();
+      allow delete: if false;
+    }
+
+    match /businessSummaries/{businessId} {
+      allow read: if signedIn();
+      allow create, update: if isFinanceStaff();
+      allow delete: if false;
+
+      match /months/{monthId} {
+        allow read: if signedIn();
+        allow create, update: if isFinanceStaff();
+        allow delete: if false;
+      }
+    }
+
+    match /accountSummaries/{accountId} {
+      allow read: if signedIn();
+      allow create, update: if isFinanceStaff();
+      allow delete: if false;
+
+      match /months/{monthId} {
+        allow read: if signedIn();
+        allow create, update: if isFinanceStaff();
+        allow delete: if false;
+      }
+    }
+  }
+}
