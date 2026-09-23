@@ -19,6 +19,11 @@ export const metadata: Metadata = {
   title: "Golden 7 Financial System",
   description:
     "Centralized financial management for The Golden 7 Myanmar Group Co., Ltd.",
+  icons: {
+    icon: [{ url: "/favicon-32.png", type: "image/png", sizes: "32x32" }],
+    apple: [{ url: "/apple-touch-icon.png", type: "image/png", sizes: "180x180" }],
+    shortcut: "/favicon-32.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

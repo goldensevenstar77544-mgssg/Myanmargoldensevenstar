@@ -135,19 +135,58 @@ export function periodOpeningFromMonths(
   return account.openingBalance + netBeforePeriodStart(months, start);
 }
 
+/**
+ * Opening when only months on/after `start` are loaded, using lifetime flow
+ * from the entity summary: before = lifetime − sum(months ≥ start).
+ */
+export function periodOpeningFromLifetime(
+  openingBalance: number,
+  lifetimeFlowNet: number,
+  monthsFromStart: EntityMonthSummary[],
+  start: string | null
+): number {
+  if (!start) return openingBalance;
+  const beforeKey = start.slice(0, 7);
+  let fromStart = 0;
+  for (const month of monthsFromStart) {
+    if (month.id < beforeKey) continue;
+    fromStart += bucketFlowNet(month);
+  }
+  return openingBalance + lifetimeFlowNet - fromStart;
+}
+
 export function businessPeriodOpening(
+  openingCapital: number,
   businessId: string,
   transactions: Transaction[],
   start: string | null
 ): number {
-  return approvedNetBefore(transactions, businessId, "businessId", start);
+  return (
+    openingCapital +
+    approvedNetBefore(transactions, businessId, "businessId", start)
+  );
 }
 
 export function businessPeriodOpeningFromMonths(
+  openingCapital: number,
   months: EntityMonthSummary[],
   start: string | null
 ): number {
-  return netBeforePeriodStart(months, start);
+  return openingCapital + netBeforePeriodStart(months, start);
+}
+
+export function businessPeriodOpeningFromLifetime(
+  openingCapital: number,
+  lifetimeFlowNet: number,
+  monthsFromStart: EntityMonthSummary[],
+  start: string | null
+): number {
+  return periodOpeningFromLifetime(
+    openingCapital,
+    lifetimeFlowNet,
+    monthsFromStart,
+    start
+  );
 }
 
 export function summarizeApproved(transactions: Transaction[]): PeriodSummary {
@@ -204,9 +243,23 @@ export function periodClosing(
 
 export function businessPeriodClosing(
   opening: number,
-  periodFlowNet: number
+  periodFlowNet: number,
+  period: PeriodKind,
+  currentHoldingsTotal: number
 ): number {
+  if (period === "all") return currentHoldingsTotal;
   return opening + periodFlowNet;
+}
+
+/** Month key (YYYY-MM) to start fetching rollups for a period view. */
+export function monthSummariesSinceKey(
+  period: PeriodKind,
+  year: number,
+  month: number
+): string | null {
+  if (period === "all") return null;
+  if (period === "year") return `${year}-01`;
+  return `${year}-${pad2(month)}`;
 }
 
 /** Day keys `YYYY-MM-DD` for a calendar month. */

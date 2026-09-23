@@ -48,7 +48,20 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (loading || !firebaseUser || !profile) {
+  // Signed in but profile not ready yet — paint shell chrome immediately.
+  if (firebaseUser && !profile) {
+    return (
+      <AppShell>
+        <LoadingState variant="page" />
+      </AppShell>
+    );
+  }
+
+  if (loading && !firebaseUser) {
+    return <LoadingState variant="screen" className="bg-zinc-50" />;
+  }
+
+  if (!firebaseUser || !profile) {
     return <LoadingState variant="screen" className="bg-zinc-50" />;
   }
 
@@ -57,7 +70,11 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   }
 
   if (!canAccessAppPath(profile, pathname)) {
-    return <LoadingState variant="screen" className="bg-zinc-50" />;
+    return (
+      <AppShell>
+        <LoadingState variant="page" />
+      </AppShell>
+    );
   }
 
   return <AppShell>{children}</AppShell>;

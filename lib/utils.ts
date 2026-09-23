@@ -108,7 +108,26 @@ export function formatDateTime(
     day: "2-digit",
     month: "short",
     year: "numeric",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+export function formatTime(
+  value: Date | string | { toDate: () => Date }
+): string {
+  let date: Date;
+  if (typeof value === "string") {
+    date = new Date(value);
+  } else if (value instanceof Date) {
+    date = value;
+  } else {
+    date = value.toDate();
+  }
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
   }).format(date);
 }

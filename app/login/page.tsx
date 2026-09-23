@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
+import { BrandLogo } from "@/components/brand-logo";
 import { LoadingState } from "@/components/loading-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { homePathForRole } from "@/lib/permissions";
-import { PiggyBank } from "lucide-react";
 
 export default function LoginPage() {
   const { signIn, firebaseUser, profile, loading, configured } = useAuth();
@@ -79,7 +79,8 @@ export default function LoginPage() {
     );
   }
 
-  if (loading || firebaseUser) {
+  // Only block the form while redirecting an already-signed-in session.
+  if (firebaseUser) {
     return (
       <LoadingState variant="screen" size="lg" className="bg-black text-white" />
     );
@@ -100,9 +101,7 @@ export default function LoginPage() {
 
       <div className="relative w-full max-w-md rounded-2xl border border-white/15 bg-white p-6 text-black shadow-2xl sm:p-8">
         <div className="mb-6 space-y-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-black text-white">
-            <PiggyBank className="h-6 w-6" />
-          </div>
+          <BrandLogo sizeClassName="h-12 w-12" priority />
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
               Golden 7 Finance

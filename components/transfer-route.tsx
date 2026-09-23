@@ -36,13 +36,13 @@ export function TransferRoute({
   return (
     <div className={cn("space-y-1.5 text-sm", className)}>
       <div>
-        <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+        <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
           From
         </div>
         <div className="truncate text-zinc-950">{from}</div>
       </div>
       <div>
-        <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+        <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
           To
         </div>
         <div className="truncate text-zinc-950">{to}</div>

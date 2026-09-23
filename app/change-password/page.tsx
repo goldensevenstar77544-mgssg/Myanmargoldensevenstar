@@ -7,8 +7,8 @@ import {
   reauthenticateWithCredential,
   updatePassword,
 } from "firebase/auth";
-import { PiggyBank } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
+import { BrandLogo } from "@/components/brand-logo";
 import { useConfirm } from "@/components/confirm-dialog";
 import { LoadingState } from "@/components/loading-state";
 import { Button } from "@/components/ui/button";
@@ -120,9 +120,7 @@ export default function ChangePasswordPage() {
 
       <div className="relative w-full max-w-md rounded-2xl border border-white/15 bg-white p-6 text-black shadow-2xl sm:p-8">
         <div className="mb-6 space-y-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-black text-white">
-            <PiggyBank className="h-6 w-6" />
-          </div>
+          <BrandLogo sizeClassName="h-12 w-12" priority />
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
               Set a new password

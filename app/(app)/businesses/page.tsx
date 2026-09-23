@@ -14,9 +14,6 @@ import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   Table,
@@ -35,26 +32,30 @@ import {
 } from "@/components/ui/dialog";
 import {
   createBusiness,
+  listAccounts,
   listBusinesses,
   updateBusiness,
 } from "@/lib/firebase/firestore";
 import { canManageMasterData } from "@/lib/permissions";
-import type { Business } from "@/lib/types";
+import type { Account, Business } from "@/lib/types";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
 import { Plus } from "lucide-react";
 import { MobileFab, MobileFabStack } from "@/components/mobile-fab";
+import { formatAccountLabel, formatMMK } from "@/lib/utils";
 
 export default function BusinessesPage() {
   const { profile } = useAuth();
   const confirm = useConfirm();
   const canManage = canManageMasterData(profile);
   const [items, setItems] = useState<Business[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Business | null>(null);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [notes, setNotes] = useState("");
+  const [openings, setOpenings] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -71,12 +72,32 @@ export default function BusinessesPage() {
 
   useLoadOnMount(load);
 
+  const activeAccounts = useMemo(
+    () => accounts.filter((a) => a.status === "active"),
+    [accounts]
+  );
+
+  const totalOpeningCapital = useMemo(() => {
+    return activeAccounts.reduce((sum, account) => {
+      return sum + (Number(openings[account.id]) || 0);
+    }, 0);
+  }, [activeAccounts, openings]);
+
   function openCreate() {
     setEditing(null);
     setName("");
     setCode("");
     setNotes("");
+    setOpenings({});
     setOpen(true);
+    void (async () => {
+      try {
+        setAccounts(await listAccounts());
+      } catch (error) {
+        console.error(error);
+        toast.error("Failed to load accounts");
+      }
+    })();
   }
 
   function openEdit(business: Business) {
@@ -84,6 +105,7 @@ export default function BusinessesPage() {
     setName(business.name);
     setCode(business.code);
     setNotes(business.notes || "");
+    setOpenings({});
     setOpen(true);
   }
 
@@ -107,7 +129,18 @@ export default function BusinessesPage() {
         });
         toast.success("Business updated");
       } else {
-        await createBusiness({ name, code, notes });
+        const openingAllocations = activeAccounts
+          .map((account) => ({
+            accountId: account.id,
+            amount: Number(openings[account.id]) || 0,
+          }))
+          .filter((o) => o.amount > 0);
+        await createBusiness({
+          name,
+          code,
+          notes,
+          openings: openingAllocations,
+        });
         toast.success("Business created");
       }
       setOpen(false);
@@ -163,7 +196,8 @@ export default function BusinessesPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Businesses</h1>
           <p className="text-sm text-zinc-500">
-            {activeCount} active of {items.length} total
+            {activeCount} active of {items.length} total — separate financial
+            records for each Golden 7 business unit.
           </p>
         </div>
         {canManage && (
@@ -180,12 +214,6 @@ export default function BusinessesPage() {
         </MobileFabStack>
       )}
       <Card>
-        <CardHeader>
-          <CardTitle>Group businesses</CardTitle>
-          <CardDescription>
-            Separate financial records for each Golden 7 business unit.
-          </CardDescription>
-        </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <LoadingState variant="page" />
@@ -198,17 +226,25 @@ export default function BusinessesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
+                  <TableHead className="w-10">#</TableHead>
+                  <TableHead className="sticky left-0 z-10 bg-zinc-50">
+                    Name
+                  </TableHead>
                   <TableHead>Code</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Notes</TableHead>
-                  {canManage && <TableHead className="text-right">Actions</TableHead>}
+                  {canManage && (
+                    <TableHead className="text-right">Actions</TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((business) => (
+                {items.map((business, index) => (
                   <TableRow key={business.id}>
-                    <TableCell className="font-medium">
+                    <TableCell className="tabular-nums text-zinc-500">
+                      {index + 1}
+                    </TableCell>
+                    <TableCell className="sticky left-0 z-10 bg-white font-medium">
                       <Link
                         href={`/businesses/${business.id}`}
                         className="text-zinc-900 underline-offset-4 hover:underline"
@@ -249,7 +285,7 @@ export default function BusinessesPage() {
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <form onSubmit={onSave}>
             <DialogHeader>
               <DialogTitle>
@@ -283,6 +319,63 @@ export default function BusinessesPage() {
                   onChange={(e) => setNotes(e.target.value)}
                 />
               </div>
+              {!editing && (
+                <div className="space-y-3 rounded-lg border border-zinc-200 p-3">
+                  <div>
+                    <p className="text-sm font-medium text-zinc-900">
+                      Opening capital by account
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      Optional. Amounts are added to each shared bank or cash
+                      account.
+                    </p>
+                  </div>
+                  {activeAccounts.length === 0 ? (
+                    <p className="text-sm text-zinc-500">
+                      No active accounts yet. Create bank or cash accounts
+                      first, or leave openings at zero.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {activeAccounts.map((account) => (
+                        <div
+                          key={account.id}
+                          className="flex items-center justify-between gap-3"
+                        >
+                          <Label
+                            htmlFor={`opening-${account.id}`}
+                            className="min-w-0 flex-1 truncate text-sm font-normal"
+                          >
+                            {formatAccountLabel(account)}
+                          </Label>
+                          <Input
+                            id={`opening-${account.id}`}
+                            type="number"
+                            min={0}
+                            step="1"
+                            inputMode="decimal"
+                            className="w-32 shrink-0"
+                            value={openings[account.id] ?? ""}
+                            placeholder="0"
+                            onChange={(e) =>
+                              setOpenings((prev) => ({
+                                ...prev,
+                                [account.id]: e.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                      ))}
+                      <p className="text-sm text-zinc-600">
+                        Total capital{" "}
+                        <span className="font-medium text-zinc-900">
+                          {formatMMK(totalOpeningCapital)}
+                        </span>
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
               {editing && (
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -297,7 +390,9 @@ export default function BusinessesPage() {
                     <Button
                       type="button"
                       variant={
-                        editing.status === "active" ? "destructive" : "secondary"
+                        editing.status === "active"
+                          ? "destructive"
+                          : "secondary"
                       }
                       size="sm"
                       onClick={() => toggleStatus(editing)}
@@ -309,7 +404,11 @@ export default function BusinessesPage() {
               )}
             </div>
             <DialogFooter className="mt-6">
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setOpen(false)}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={saving}>

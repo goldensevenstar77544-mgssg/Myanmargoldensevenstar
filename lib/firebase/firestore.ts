@@ -3,7 +3,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  setDoc,
   addDoc,
   updateDoc,
   deleteDoc,
@@ -15,6 +14,10 @@ import {
   runTransaction,
   serverTimestamp,
   Timestamp,
+  writeBatch,
+  getAggregateFromServer,
+  count,
+  sum,
   type DocumentData,
   type QueryConstraint,
   type QueryDocumentSnapshot,
@@ -48,6 +51,7 @@ import type {
   AuditEntityType,
   AuditLog,
   Business,
+  BusinessAccountBalance,
   FixedAsset,
   Transaction,
   TransactionAttachment,
@@ -159,6 +163,67 @@ function mapAccount(data: DocumentData, id: string): Account {
     createdAt: toDate(data.createdAt),
     updatedAt: toDate(data.updatedAt),
   };
+}
+
+export function businessAccountBalanceId(
+  businessId: string,
+  accountId: string
+): string {
+  return `${businessId}_${accountId}`;
+}
+
+function businessAccountBalanceRef(businessId: string, accountId: string) {
+  return doc(
+    getClientDb(),
+    "businessAccountBalances",
+    businessAccountBalanceId(businessId, accountId)
+  );
+}
+
+function mapBusinessAccountBalance(
+  data: DocumentData,
+  id: string
+): BusinessAccountBalance {
+  return {
+    id,
+    businessId: data.businessId,
+    accountId: data.accountId,
+    openingBalance: Number(data.openingBalance ?? 0),
+    currentBalance: Number(data.currentBalance ?? 0),
+    createdAt: toDate(data.createdAt),
+    updatedAt: toDate(data.updatedAt),
+  };
+}
+
+/**
+ * Apply an approved-tx delta to a business↔account holding.
+ * Must be called only after all transaction reads (Firestore txn rules).
+ */
+function applyHoldingDeltaInTxn(
+  transaction: FsTransaction,
+  holdingSnap: Awaited<ReturnType<FsTransaction["get"]>>,
+  holdingRef: ReturnType<typeof businessAccountBalanceRef>,
+  businessId: string,
+  accountId: string,
+  delta: number
+): void {
+  if (!holdingSnap.exists()) {
+    transaction.set(holdingRef, {
+      businessId,
+      accountId,
+      openingBalance: 0,
+      currentBalance: delta,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return;
+  }
+  const holdingData = holdingSnap.data() as DocumentData;
+  const current = Number(holdingData.currentBalance ?? 0);
+  transaction.update(holdingRef, {
+    currentBalance: current + delta,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 function mapTransaction(data: DocumentData, id: string): Transaction {
@@ -390,6 +455,19 @@ export async function listAuditLogs(filters?: {
   if (filters?.entityType)
     constraints.push(where("entityType", "==", filters.entityType));
 
+  if (filters?.dateFrom) {
+    const from = Timestamp.fromDate(
+      new Date(`${filters.dateFrom}T00:00:00`)
+    );
+    constraints.push(where("createdAt", ">=", from));
+  }
+  if (filters?.dateTo) {
+    const to = Timestamp.fromDate(
+      new Date(`${filters.dateTo}T23:59:59.999`)
+    );
+    constraints.push(where("createdAt", "<=", to));
+  }
+
   constraints.push(orderBy("createdAt", "desc"));
 
   if (filters?.cursor) constraints.push(startAfter(filters.cursor));
@@ -397,18 +475,7 @@ export async function listAuditLogs(filters?: {
 
   const q = query(collection(getClientDb(), "auditLogs"), ...constraints);
   const snap = await getDocs(q);
-  let items = snap.docs.map((d) => mapAuditLog(d.data(), d.id));
-
-  // Date bounds on createdAt need Timestamp inequalities + matching orderBy;
-  // keep a light client filter when only date filters are set without a dedicated index path.
-  if (filters?.dateFrom) {
-    const from = new Date(`${filters.dateFrom}T00:00:00`);
-    items = items.filter((a) => a.createdAt >= from);
-  }
-  if (filters?.dateTo) {
-    const to = new Date(`${filters.dateTo}T23:59:59.999`);
-    items = items.filter((a) => a.createdAt <= to);
-  }
+  const items = snap.docs.map((d) => mapAuditLog(d.data(), d.id));
 
   const nextCursor =
     snap.docs.length === pageSize
@@ -418,33 +485,7 @@ export async function listAuditLogs(filters?: {
   return { items, nextCursor };
 }
 
-export async function ensureUserProfile(params: {
-  uid: string;
-  email: string;
-  displayName?: string | null;
-}): Promise<AppUser> {
-  const db = getClientDb();
-  const ref = doc(db, "users", params.uid);
-  const snap = await getDoc(ref);
-  if (snap.exists()) {
-    return mapUser(snap.data(), snap.id);
-  }
-  const payload = {
-    email: params.email,
-    displayName: params.displayName || params.email.split("@")[0],
-    role: null as UserRole | null,
-    createdAt: serverTimestamp(),
-  };
-  await setDoc(ref, payload);
-  return {
-    id: params.uid,
-    email: payload.email,
-    displayName: payload.displayName,
-    role: null,
-    mustChangePassword: false,
-    createdAt: new Date(),
-  };
-}
+export { ensureUserProfile } from "@/lib/firebase/user-profile";
 
 export async function getUserProfile(uid: string): Promise<AppUser | null> {
   const snap = await getDoc(doc(getClientDb(), "users", uid));
@@ -547,18 +588,234 @@ export async function createBusiness(input: {
   code: string;
   notes?: string;
   fixedAssetExpense?: number;
+  openings?: { accountId: string; amount: number }[];
 }): Promise<string> {
-  const ref = await addDoc(collection(getClientDb(), "businesses"), {
+  const db = getClientDb();
+  const openings = (input.openings ?? [])
+    .map((o) => ({
+      accountId: o.accountId,
+      amount: Number(o.amount) || 0,
+    }))
+    .filter((o) => o.amount > 0);
+
+  for (const o of openings) {
+    if (o.amount < 0) {
+      throw new Error("Opening amounts cannot be negative");
+    }
+  }
+
+  const batch = writeBatch(db);
+  const businessRef = doc(collection(db, "businesses"));
+  const totalCapital = openings.reduce((sum, o) => sum + o.amount, 0);
+
+  batch.set(businessRef, {
     name: input.name.trim(),
     code: input.code.trim().toUpperCase(),
     status: "active",
     notes: input.notes?.trim() || "",
     fixedAssetExpense: Number(input.fixedAssetExpense) || 0,
+    totalCapital,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+
+  for (const o of openings) {
+    const accountRef = doc(db, "accounts", o.accountId);
+    const accountSnap = await getDoc(accountRef);
+    if (!accountSnap.exists()) {
+      throw new Error("Account not found");
+    }
+    const account = accountSnap.data();
+    const opening = Number(account.openingBalance ?? 0);
+    const current = Number(account.currentBalance ?? 0);
+
+    batch.update(accountRef, {
+      openingBalance: opening + o.amount,
+      currentBalance: current + o.amount,
+      updatedAt: serverTimestamp(),
+    });
+
+    const holdingRef = doc(
+      db,
+      "businessAccountBalances",
+      businessAccountBalanceId(businessRef.id, o.accountId)
+    );
+    batch.set(holdingRef, {
+      businessId: businessRef.id,
+      accountId: o.accountId,
+      openingBalance: o.amount,
+      currentBalance: o.amount,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  await batch.commit();
   invalidateBusinessesCache();
-  return ref.id;
+  if (openings.length > 0) invalidateAccountsCache();
+  return businessRef.id;
+}
+
+export async function listBusinessAccountBalances(
+  businessId: string
+): Promise<BusinessAccountBalance[]> {
+  const q = query(
+    collection(getClientDb(), "businessAccountBalances"),
+    where("businessId", "==", businessId)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => mapBusinessAccountBalance(d.data(), d.id));
+}
+
+export async function listAccountBusinessBalances(
+  accountId: string
+): Promise<BusinessAccountBalance[]> {
+  const q = query(
+    collection(getClientDb(), "businessAccountBalances"),
+    where("accountId", "==", accountId)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => mapBusinessAccountBalance(d.data(), d.id));
+}
+
+/**
+ * Set opening capital per account for a business.
+ * Deltas vs previous openings are applied to both holdings and shared accounts.
+ */
+export async function setBusinessOpeningBalances(
+  businessId: string,
+  allocations: { accountId: string; amount: number }[]
+): Promise<void> {
+  const normalized = allocations.map((o) => ({
+    accountId: o.accountId,
+    amount: Number(o.amount) || 0,
+  }));
+  for (const o of normalized) {
+    if (o.amount < 0) {
+      throw new Error("Opening amounts cannot be negative");
+    }
+  }
+
+  const db = getClientDb();
+  const businessRef = doc(db, "businesses", businessId);
+  const existingHoldings = await listBusinessAccountBalances(businessId);
+  const allocationAccountIds = new Set(normalized.map((o) => o.accountId));
+  const extraHoldingIds = existingHoldings
+    .filter((h) => !allocationAccountIds.has(h.accountId))
+    .map((h) => h.id);
+
+  await runTransaction(db, async (transaction) => {
+    const businessSnap = await transaction.get(businessRef);
+    if (!businessSnap.exists()) throw new Error("Business not found");
+
+    type Planned = {
+      accountId: string;
+      amount: number;
+      holdingRef: ReturnType<typeof doc>;
+      accountRef: ReturnType<typeof doc>;
+      holdingSnap: Awaited<ReturnType<FsTransaction["get"]>>;
+      accountSnap: Awaited<ReturnType<FsTransaction["get"]>>;
+    };
+    const planned: Planned[] = [];
+
+    for (const o of normalized) {
+      const holdingRef = doc(
+        db,
+        "businessAccountBalances",
+        businessAccountBalanceId(businessId, o.accountId)
+      );
+      const accountRef = doc(db, "accounts", o.accountId);
+      const holdingSnap = await transaction.get(holdingRef);
+      const accountSnap = await transaction.get(accountRef);
+      planned.push({
+        accountId: o.accountId,
+        amount: o.amount,
+        holdingRef,
+        accountRef,
+        holdingSnap,
+        accountSnap,
+      });
+    }
+
+    const extraSnaps: Awaited<ReturnType<FsTransaction["get"]>>[] = [];
+    for (const id of extraHoldingIds) {
+      extraSnaps.push(
+        await transaction.get(doc(db, "businessAccountBalances", id))
+      );
+    }
+
+    let totalCapital = 0;
+    for (const snap of extraSnaps) {
+      if (snap.exists()) {
+        const data = snap.data() as DocumentData;
+        totalCapital += Number(data.openingBalance ?? 0);
+      }
+    }
+
+    for (const row of planned) {
+      if (!row.accountSnap.exists()) {
+        throw new Error("Account not found");
+      }
+      const holdingData = row.holdingSnap.exists()
+        ? (row.holdingSnap.data() as DocumentData)
+        : null;
+      const accountData = row.accountSnap.data() as DocumentData;
+      const prevOpening = holdingData
+        ? Number(holdingData.openingBalance ?? 0)
+        : 0;
+      const prevCurrent = holdingData
+        ? Number(holdingData.currentBalance ?? 0)
+        : 0;
+      const delta = row.amount - prevOpening;
+      const nextHoldingCurrent = prevCurrent + delta;
+      const acctOpening = Number(accountData.openingBalance ?? 0);
+      const acctCurrent = Number(accountData.currentBalance ?? 0);
+      const nextAcctOpening = acctOpening + delta;
+      const nextAcctCurrent = acctCurrent + delta;
+
+      if (nextHoldingCurrent < 0 || nextAcctCurrent < 0) {
+        throw new Error(
+          "Cannot reduce opening capital below available balance in that account"
+        );
+      }
+
+      totalCapital += row.amount;
+
+      if (delta !== 0) {
+        transaction.update(row.accountRef, {
+          openingBalance: nextAcctOpening,
+          currentBalance: nextAcctCurrent,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (!row.holdingSnap.exists()) {
+        if (row.amount === 0) continue;
+        transaction.set(row.holdingRef, {
+          businessId,
+          accountId: row.accountId,
+          openingBalance: row.amount,
+          currentBalance: nextHoldingCurrent,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        transaction.update(row.holdingRef, {
+          openingBalance: row.amount,
+          currentBalance: nextHoldingCurrent,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    transaction.update(businessRef, {
+      totalCapital,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  invalidateBusinessesCache();
+  invalidateAccountsCache();
 }
 
 export async function updateBusiness(
@@ -781,11 +1038,20 @@ export type ListTransactionsFilters = {
   includeAttachments?: boolean;
 };
 
-export async function listTransactions(
-  filters?: ListTransactionsFilters
-): Promise<PageResult<Transaction>> {
-  const pageSize = filters?.pageSize ?? DEFAULT_PAGE_SIZE;
-  const useDateOrder = Boolean(filters?.dateFrom || filters?.dateTo);
+export type TransactionsSummary = {
+  count: number;
+  totalIn: number;
+  totalOut: number;
+  net: number;
+};
+
+/** Equality / range filters only (no orderBy). Safe for aggregate queries. */
+function transactionFilterConstraints(
+  filters?: Omit<
+    ListTransactionsFilters,
+    "pageSize" | "cursor" | "includeAttachments"
+  >
+): QueryConstraint[] {
   const constraints: QueryConstraint[] = [];
 
   if (filters?.makerId)
@@ -802,7 +1068,29 @@ export async function listTransactions(
     constraints.push(where("date", ">=", filters.dateFrom));
   if (filters?.dateTo) constraints.push(where("date", "<=", filters.dateTo));
 
-  constraints.push(orderBy(useDateOrder ? "date" : "createdAt", "desc"));
+  return constraints;
+}
+
+function transactionListConstraints(
+  filters?: ListTransactionsFilters
+): QueryConstraint[] {
+  const useDateOrder = Boolean(filters?.dateFrom || filters?.dateTo);
+  const constraints = transactionFilterConstraints(filters);
+  if (useDateOrder) {
+    // Date range requires ordering by date first; secondary createdAt puts latest first within a day.
+    constraints.push(orderBy("date", "desc"));
+    constraints.push(orderBy("createdAt", "desc"));
+  } else {
+    constraints.push(orderBy("createdAt", "desc"));
+  }
+  return constraints;
+}
+
+export async function listTransactions(
+  filters?: ListTransactionsFilters
+): Promise<PageResult<Transaction>> {
+  const pageSize = filters?.pageSize ?? DEFAULT_PAGE_SIZE;
+  const constraints = transactionListConstraints(filters);
 
   if (filters?.cursor) constraints.push(startAfter(filters.cursor));
   constraints.push(limit(pageSize));
@@ -817,6 +1105,69 @@ export async function listTransactions(
       : null;
 
   return { items, nextCursor };
+}
+
+/**
+ * KPI totals via Firestore aggregate queries (count + sum) — no full doc scans.
+ * Uses two direction-scoped aggregates when direction is unrestricted.
+ */
+export async function summarizeTransactions(
+  filters?: Omit<
+    ListTransactionsFilters,
+    "pageSize" | "cursor" | "includeAttachments"
+  >
+): Promise<TransactionsSummary> {
+  const col = collection(getClientDb(), "transactions");
+
+  async function aggregateDirection(
+    direction: TransactionDirection
+  ): Promise<{ count: number; total: number }> {
+    const constraints = transactionFilterConstraints({
+      ...filters,
+      direction,
+    });
+    const snap = await getAggregateFromServer(query(col, ...constraints), {
+      count: count(),
+      total: sum("amount"),
+    });
+    const data = snap.data();
+    return {
+      count: data.count,
+      total: Number(data.total ?? 0),
+    };
+  }
+
+  if (filters?.direction === "income") {
+    const income = await aggregateDirection("income");
+    return {
+      count: income.count,
+      totalIn: income.total,
+      totalOut: 0,
+      net: income.total,
+    };
+  }
+  if (filters?.direction === "expense") {
+    const expense = await aggregateDirection("expense");
+    return {
+      count: expense.count,
+      totalIn: 0,
+      totalOut: expense.total,
+      net: -expense.total,
+    };
+  }
+
+  const [income, expense] = await Promise.all([
+    aggregateDirection("income"),
+    aggregateDirection("expense"),
+  ]);
+  const totalIn = income.total;
+  const totalOut = expense.total;
+  return {
+    count: income.count + expense.count,
+    totalIn,
+    totalOut,
+    net: totalIn - totalOut,
+  };
 }
 
 export async function getTransaction(id: string): Promise<Transaction | null> {
@@ -1343,10 +1694,15 @@ async function approveSingleTransaction(
     const accountSnap = await transaction.get(accountRef);
     if (!accountSnap.exists()) throw new Error("Account not found");
 
+    const businessId = data.businessId as string;
+    const accountId = data.accountId as string;
+    const holdingRef = businessAccountBalanceRef(businessId, accountId);
+    const holdingSnap = await transaction.get(holdingRef);
+
     const amount = Number(data.amount);
     const summaryInput = {
-      businessId: data.businessId as string,
-      accountId: data.accountId as string,
+      businessId,
+      accountId,
       direction: data.direction as TransactionDirection,
       amount,
       date: data.date as string,
@@ -1377,6 +1733,14 @@ async function approveSingleTransaction(
       approvedCount: approvedCount + 1,
       updatedAt: serverTimestamp(),
     });
+    applyHoldingDeltaInTxn(
+      transaction,
+      holdingSnap,
+      holdingRef,
+      businessId,
+      accountId,
+      delta
+    );
     writeApproveSummaries(transaction, summaryInput, summaryCtx, -1);
     transaction.set(
       auditRef,
@@ -1387,8 +1751,8 @@ async function approveSingleTransaction(
         actorName: name,
         previousStatus: "pending",
         newStatus: "approved",
-        businessId: data.businessId,
-        accountId: data.accountId,
+        businessId,
+        accountId,
         amount,
         direction: data.direction,
         description: data.description ?? "",
@@ -1414,12 +1778,18 @@ export async function approveTransferGroup(
   const name = approverName.trim();
   const legRefs = legs.map((l) => doc(db, "transactions", l.id));
   const accountRefs = legs.map((l) => doc(db, "accounts", l.accountId));
+  const holdingRefs = legs.map((l) =>
+    businessAccountBalanceRef(l.businessId, l.accountId)
+  );
   const auditRefs = legs.map(() => doc(collection(db, "auditLogs")));
 
   await runTransaction(db, async (transaction) => {
     const legSnaps = await Promise.all(legRefs.map((r) => transaction.get(r)));
     const accountSnaps = await Promise.all(
       accountRefs.map((r) => transaction.get(r))
+    );
+    const holdingSnaps = await Promise.all(
+      holdingRefs.map((r) => transaction.get(r))
     );
 
     for (let i = 0; i < legs.length; i++) {
@@ -1492,6 +1862,14 @@ export async function approveTransferGroup(
         approvedCount: approvedCount + 1,
         updatedAt: serverTimestamp(),
       });
+      applyHoldingDeltaInTxn(
+        transaction,
+        holdingSnaps[i]!,
+        holdingRefs[i]!,
+        leg.businessId,
+        leg.accountId,
+        delta
+      );
       transaction.set(
         auditRefs[i]!,
         auditPayload({

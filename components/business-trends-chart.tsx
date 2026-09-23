@@ -11,7 +11,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -19,7 +18,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -28,8 +26,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Business, GroupMonthSummary } from "@/lib/types";
+import type { Business, GroupMonthSummary, Transaction } from "@/lib/types";
+import type { PeriodKind } from "@/lib/account-period";
 import {
+  allTimeYearKeysFromMonths,
+  formatDayLabel,
+  monthDayKeys,
+} from "@/lib/account-period";
+import {
+  addTxToBucket,
+  emptyBucket,
   mapBucket,
   metricFromBucket,
   type SummaryMetric,
@@ -67,18 +73,29 @@ const SERIES_COLORS = [
 interface BusinessTrendsChartProps {
   businesses: Business[];
   months: GroupMonthSummary[];
+  /** Used for daily (month) charts. */
+  transactions?: Transaction[];
+  period?: PeriodKind;
   year: number;
-  onYearChange: (year: number) => void;
+  month?: number;
+  periodLabel?: string;
+  loading?: boolean;
 }
 
 export function BusinessTrendsChart({
   businesses,
   months,
+  transactions = [],
+  period = "year",
   year,
-  onYearChange,
+  month = 1,
+  periodLabel,
+  loading = false,
 }: BusinessTrendsChartProps) {
   const currentYear = new Date().getFullYear();
   const [metric, setMetric] = useState<TrendMetric>("net");
+  const isMonth = period === "month";
+  const isAll = period === "all";
 
   const activeBusinesses = useMemo(
     () => businesses.filter((b) => b.status === "active"),
@@ -90,14 +107,93 @@ export function BusinessTrendsChart({
     [months]
   );
 
-  const { data, hasActivity } = useMemo(() => {
+  const { data, hasActivity, bucketLabel } = useMemo(() => {
+    if (isMonth) {
+      const keys = monthDayKeys(year, month);
+      const keySet = new Set(keys);
+      const dayMaps = new Map(
+        keys.map((key) => [
+          key,
+          new Map<string, ReturnType<typeof emptyBucket>>(),
+        ])
+      );
+      let activity = false;
+      for (const tx of transactions) {
+        if (tx.status !== "approved") continue;
+        if (!keySet.has(tx.date)) continue;
+        const byBusiness = dayMaps.get(tx.date);
+        if (!byBusiness) continue;
+        const prev = byBusiness.get(tx.businessId) ?? emptyBucket();
+        byBusiness.set(
+          tx.businessId,
+          addTxToBucket(prev, {
+            direction: tx.direction,
+            amount: tx.amount,
+            category: tx.category,
+            transferGroupId: tx.transferGroupId,
+          })
+        );
+      }
+      const rows = keys.map((key) => {
+        const byBusiness = dayMaps.get(key);
+        const row: Record<string, string | number> = {
+          key,
+          label: formatDayLabel(key),
+        };
+        for (const business of activeBusinesses) {
+          const value = metricFromBucket(
+            byBusiness?.get(business.id) ?? emptyBucket(),
+            metric
+          );
+          if (value !== 0) activity = true;
+          row[business.id] = value;
+        }
+        return row;
+      });
+      return { data: rows, hasActivity: activity, bucketLabel: "Daily" };
+    }
+
+    if (isAll) {
+      const yearKeys = allTimeYearKeysFromMonths(months, currentYear);
+      let activity = false;
+      const rows = yearKeys.map((y) => {
+        const prefix = `${y}-`;
+        const row: Record<string, string | number> = {
+          key: String(y),
+          label: String(y),
+        };
+        for (const business of activeBusinesses) {
+          let income = 0;
+          let expense = 0;
+          let transferIn = 0;
+          let transferOut = 0;
+          for (const summary of months) {
+            if (!summary.id.startsWith(prefix)) continue;
+            const bucket = mapBucket(summary.byBusiness, business.id);
+            income += bucket.income;
+            expense += bucket.expense;
+            transferIn += bucket.transferIn;
+            transferOut += bucket.transferOut;
+          }
+          const value = metricFromBucket(
+            { income, expense, transferIn, transferOut },
+            metric
+          );
+          if (value !== 0) activity = true;
+          row[business.id] = value;
+        }
+        return row;
+      });
+      return { data: rows, hasActivity: activity, bucketLabel: "Yearly" };
+    }
+
     const keys = yearMonthKeys(year);
     let activity = false;
-    const rows = keys.map((month) => {
-      const summary = monthById.get(month);
+    const rows = keys.map((monthKey) => {
+      const summary = monthById.get(monthKey);
       const row: Record<string, string | number> = {
-        month,
-        label: formatMonthShort(month),
+        key: monthKey,
+        label: formatMonthShort(monthKey),
       };
       for (const business of activeBusinesses) {
         const value = metricFromBucket(
@@ -109,10 +205,23 @@ export function BusinessTrendsChart({
       }
       return row;
     });
-    return { data: rows, hasActivity: activity };
-  }, [activeBusinesses, monthById, metric, year]);
+    return { data: rows, hasActivity: activity, bucketLabel: "Monthly" };
+  }, [
+    activeBusinesses,
+    currentYear,
+    isAll,
+    isMonth,
+    metric,
+    month,
+    monthById,
+    months,
+    transactions,
+    year,
+  ]);
 
   const metricLabel = METRIC_LABELS[metric];
+  const rangeLabel = periodLabel ?? String(year);
+  const emptyRangeLabel = isMonth || isAll ? rangeLabel : String(year);
 
   return (
     <Card>
@@ -120,57 +229,29 @@ export function BusinessTrendsChart({
         <div>
           <CardTitle>Business trends</CardTitle>
           <CardDescription>
-            Monthly {metricLabel.toLowerCase()} by business for {year}{" "}
-            (approved only).
+            {bucketLabel} {metricLabel.toLowerCase()} by business for{" "}
+            {rangeLabel} (approved only).
           </CardDescription>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="h-10 w-10"
-              aria-label="Previous year"
-              onClick={() => onYearChange(year - 1)}
-            >
-              <ChevronLeft />
-            </Button>
-            <span className="min-w-14 text-center text-sm font-medium tabular-nums">
-              {year}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="h-10 w-10"
-              aria-label="Next year"
-              disabled={year >= currentYear}
-              onClick={() => onYearChange(Math.min(currentYear, year + 1))}
-            >
-              <ChevronRight />
-            </Button>
-          </div>
-          <div className="w-40">
-            <Label htmlFor="trend-metric" className="sr-only">
-              Metric
-            </Label>
-            <Select
-              value={metric}
-              onValueChange={(value) => setMetric(value as TrendMetric)}
-            >
-              <SelectTrigger id="trend-metric">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="net">Net profit</SelectItem>
-                <SelectItem value="income">Income</SelectItem>
-                <SelectItem value="expense">Expenses</SelectItem>
-                <SelectItem value="transferIn">Transfer in</SelectItem>
-                <SelectItem value="transferOut">Transfer out</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="w-40">
+          <Label htmlFor="trend-metric" className="sr-only">
+            Metric
+          </Label>
+          <Select
+            value={metric}
+            onValueChange={(value) => setMetric(value as TrendMetric)}
+          >
+            <SelectTrigger id="trend-metric">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="net">Net profit</SelectItem>
+              <SelectItem value="income">Income</SelectItem>
+              <SelectItem value="expense">Expenses</SelectItem>
+              <SelectItem value="transferIn">Transfer in</SelectItem>
+              <SelectItem value="transferOut">Transfer out</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </CardHeader>
       <CardContent>
@@ -178,25 +259,35 @@ export function BusinessTrendsChart({
           <p className="py-10 text-center text-sm text-zinc-500">
             No active businesses to chart yet.
           </p>
+        ) : loading ? (
+          <p className="py-10 text-center text-sm text-zinc-500">
+            Loading chart data…
+          </p>
         ) : !hasActivity ? (
           <p className="py-10 text-center text-sm text-zinc-500">
-            No approved transactions in {year}.
+            No approved transactions in {emptyRangeLabel}.
           </p>
         ) : (
           <div className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={data}
-                margin={{ top: 8, right: 12, left: 4, bottom: 0 }}
+                margin={{
+                  top: 8,
+                  right: 12,
+                  left: 4,
+                  bottom: isMonth ? 4 : 0,
+                }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
                 <XAxis
                   dataKey="label"
-                  tick={{ fill: "#71717a", fontSize: 12 }}
+                  tick={{ fill: "#71717a", fontSize: isMonth ? 9 : 12 }}
                   tickLine={false}
                   axisLine={{ stroke: "#e4e4e7" }}
-                  interval="preserveStartEnd"
-                  minTickGap={28}
+                  interval={isMonth ? 0 : "preserveStartEnd"}
+                  minTickGap={isMonth ? 0 : 28}
+                  padding={isMonth ? { left: 4, right: 4 } : undefined}
                 />
                 <YAxis
                   domain={[paddedYMin, paddedYMax]}
@@ -216,7 +307,13 @@ export function BusinessTrendsChart({
                       business?.name ?? String(name),
                     ];
                   }}
-                  labelFormatter={(label) => `${label} ${year}`}
+                  labelFormatter={(label) =>
+                    isMonth
+                      ? `${label} ${rangeLabel}`
+                      : isAll
+                        ? String(label)
+                        : `${label} ${year}`
+                  }
                   contentStyle={{
                     borderRadius: 8,
                     borderColor: "#e4e4e7",
@@ -238,7 +335,7 @@ export function BusinessTrendsChart({
                     name={business.id}
                     stroke={SERIES_COLORS[index % SERIES_COLORS.length]}
                     strokeWidth={2}
-                    dot={false}
+                    dot={isMonth || isAll ? { r: 2 } : false}
                     activeDot={{ r: 4 }}
                   />
                 ))}

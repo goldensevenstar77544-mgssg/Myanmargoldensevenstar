@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { AccountTrendsChart } from "@/components/account-trends-chart";
 import { LoadingState } from "@/components/loading-state";
 import { PageBackButton } from "@/components/page-back-button";
+import { ResponsiveSwitch } from "@/components/responsive-switch";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,21 +36,26 @@ import {
 } from "@/components/ui/table";
 import {
   getAccount,
+  listAccountBusinessBalances,
   listBusinesses,
   listTransactions,
   type PageCursor,
 } from "@/lib/firebase/firestore";
-import { listAccountMonthSummaries } from "@/lib/firebase/summaries";
+import { listAccountMonthSummaries, getAccountSummary } from "@/lib/firebase/summaries";
 import {
   getPeriodBounds,
+  monthSummariesSinceKey,
   periodClosing,
+  periodOpeningFromLifetime,
   periodOpeningFromMonths,
   summarizeMonthsInPeriod,
   type AccountPeriod,
 } from "@/lib/account-period";
+import { bucketFlowNet } from "@/lib/summaries";
 import type {
   Account,
   Business,
+  BusinessAccountBalance,
   EntityMonthSummary,
   Transaction,
 } from "@/lib/types";
@@ -82,10 +88,14 @@ function MetricCell({
   label,
   amount,
   tone,
+  hero,
+  className,
 }: {
   label: string;
   amount: number;
   tone?: "income" | "expense" | "neutral";
+  hero?: boolean;
+  className?: string;
 }) {
   const valueTone =
     tone === "income"
@@ -95,14 +105,23 @@ function MetricCell({
         : "text-zinc-950";
 
   return (
-    <div className="min-w-0 px-2.5 py-1.5 sm:px-3">
-      <div className="truncate text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+    <div
+      className={cn(
+        "min-w-0 px-2.5 sm:px-3",
+        hero ? "py-2.5 sm:py-3" : "py-2",
+        className
+      )}
+    >
+      <div className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </div>
       <div
         title={formatMMK(amount)}
         className={cn(
-          "mt-0.5 truncate text-sm font-semibold tracking-tight tabular-nums leading-tight",
+          "mt-0.5 font-semibold tracking-tight tabular-nums leading-tight",
+          hero
+            ? "text-base sm:text-xl md:text-2xl"
+            : "truncate text-base",
           valueTone
         )}
       >
@@ -155,7 +174,9 @@ export default function AccountDetailPage() {
   const [monthSummaries, setMonthSummaries] = useState<EntityMonthSummary[]>(
     []
   );
+  const [lifetimeFlowNet, setLifetimeFlowNet] = useState(0);
   const [businesses, setBusinesses] = useState<Business[]>([]);
+  const [holdings, setHoldings] = useState<BusinessAccountBalance[]>([]);
   const [loading, setLoading] = useState(true);
   const [txLoading, setTxLoading] = useState(false);
   const [cursor, setCursor] = useState<PageCursor | null>(null);
@@ -169,17 +190,24 @@ export default function AccountDetailPage() {
     [period, year, month]
   );
 
+  const sinceMonthKey = useMemo(
+    () => monthSummariesSinceKey(period, year, month),
+    [period, year, month]
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [acc, biz, months] = await Promise.all([
+      const [acc, biz, balances, entitySummary] = await Promise.all([
         getAccount(id),
         listBusinesses(),
-        listAccountMonthSummaries(id),
+        listAccountBusinessBalances(id),
+        getAccountSummary(id),
       ]);
       setAccount(acc);
       setBusinesses(biz);
-      setMonthSummaries(months);
+      setHoldings(balances);
+      setLifetimeFlowNet(bucketFlowNet(entitySummary));
     } catch (error) {
       console.error(error);
       toast.error("Failed to load account");
@@ -189,6 +217,21 @@ export default function AccountDetailPage() {
   }, [id]);
 
   useLoadOnMount(load);
+
+  useEffect(() => {
+    let cancelled = false;
+    listAccountMonthSummaries(id, sinceMonthKey)
+      .then((months) => {
+        if (!cancelled) setMonthSummaries(months);
+      })
+      .catch((error) => {
+        console.error(error);
+        if (!cancelled) toast.error("Failed to load period summaries");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, sinceMonthKey]);
 
   const loadTransactions = useCallback(
     async (append: boolean, after: PageCursor | null) => {
@@ -228,13 +271,45 @@ export default function AccountDetailPage() {
     [businesses]
   );
 
-  const opening = useMemo(
-    () =>
-      account
-        ? periodOpeningFromMonths(account, monthSummaries, bounds.start)
-        : 0,
-    [account, monthSummaries, bounds.start]
+  const holdingsTotalOpening = useMemo(
+    () => holdings.reduce((sum, h) => sum + h.openingBalance, 0),
+    [holdings]
   );
+
+  const holdingsTotalCurrent = useMemo(
+    () => holdings.reduce((sum, h) => sum + h.currentBalance, 0),
+    [holdings]
+  );
+
+  const unallocatedCurrent = useMemo(() => {
+    if (!account) return 0;
+    return account.currentBalance - holdingsTotalCurrent;
+  }, [account, holdingsTotalCurrent]);
+
+  const unallocatedOpening = useMemo(() => {
+    if (!account) return 0;
+    return account.openingBalance - holdingsTotalOpening;
+  }, [account, holdingsTotalOpening]);
+
+  const shareBase = useMemo(() => {
+    if (!account) return 0;
+    return Math.abs(account.currentBalance) > 0
+      ? account.currentBalance
+      : holdingsTotalCurrent;
+  }, [account, holdingsTotalCurrent]);
+
+  const opening = useMemo(() => {
+    if (!account) return 0;
+    if (!bounds.start) {
+      return periodOpeningFromMonths(account, monthSummaries, null);
+    }
+    return periodOpeningFromLifetime(
+      account.openingBalance,
+      lifetimeFlowNet,
+      monthSummaries,
+      bounds.start
+    );
+  }, [account, monthSummaries, bounds.start, lifetimeFlowNet]);
 
   const summary = useMemo(
     () => summarizeMonthsInPeriod(monthSummaries, period, year, month),
@@ -277,6 +352,13 @@ export default function AccountDetailPage() {
   const canGoNextMonth =
     year < currentYear || (year === currentYear && month < currentMonth);
   const canGoNextYear = year < currentYear;
+  const isCurrentMonth = year === currentYear && month === currentMonth;
+  const isCurrentYear = year === currentYear;
+
+  function goToCurrentPeriod() {
+    setYear(currentYear);
+    setMonth(currentMonth);
+  }
 
   if (loading) {
     return <LoadingState variant="inline" />;
@@ -324,13 +406,99 @@ export default function AccountDetailPage() {
             {account.status}
           </Badge>
         </div>
-        <p className="text-sm text-zinc-500">{details}</p>
-        <p className="text-xs text-zinc-500">
-          Opening {formatMMK(account.openingBalance)} · Pending{" "}
-          {account.pendingCount} · Approved {account.approvedCount} · Current{" "}
+        {details ? <p className="text-sm text-zinc-500">{details}</p> : null}
+        <p className="text-2xl font-semibold tracking-tight tabular-nums text-zinc-950">
           {formatMMK(account.currentBalance)}
         </p>
+        <p className="text-xs text-zinc-500">
+          Opening {formatMMK(account.openingBalance)} · Pending{" "}
+          {account.pendingCount} · Approved {account.approvedCount}
+        </p>
       </div>
+
+      <Card>
+        <CardHeader className="space-y-1 py-3">
+          <CardTitle className="text-base">Business holdings</CardTitle>
+          <CardDescription className="text-xs">
+            Attributed opening {formatMMK(holdingsTotalOpening)}
+            {" · "}
+            Attributed current {formatMMK(holdingsTotalCurrent)}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          {holdings.length === 0 && unallocatedCurrent === 0 ? (
+            <p className="px-4 py-6 text-sm text-zinc-500">
+              No business capital attributed to this account yet.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-10">#</TableHead>
+                  <TableHead>Business</TableHead>
+                  <TableHead>Opening</TableHead>
+                  <TableHead>Current</TableHead>
+                  <TableHead className="text-right">Share</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {holdings.map((holding, index) => {
+                  const share =
+                    shareBase !== 0
+                      ? (holding.currentBalance / shareBase) * 100
+                      : 0;
+                  const name =
+                    businessMap[holding.businessId] ?? holding.businessId;
+                  return (
+                    <TableRow key={holding.id}>
+                      <TableCell className="tabular-nums text-zinc-500">
+                        {index + 1}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        <Link
+                          href={`/businesses/${holding.businessId}`}
+                          className="text-zinc-900 underline-offset-4 hover:underline"
+                        >
+                          {name}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatMMK(holding.openingBalance)}
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatMMK(holding.currentBalance)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-zinc-500">
+                        {share.toFixed(1)}%
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {unallocatedCurrent !== 0 && (
+                  <TableRow>
+                    <TableCell />
+                    <TableCell className="font-medium text-zinc-500">
+                      Unallocated
+                    </TableCell>
+                    <TableCell className="tabular-nums text-zinc-500">
+                      {formatMMK(unallocatedOpening)}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-zinc-500">
+                      {formatMMK(unallocatedCurrent)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-zinc-500">
+                      {shareBase !== 0
+                        ? ((unallocatedCurrent / shareBase) * 100).toFixed(1)
+                        : "0.0"}
+                      %
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div className="flex rounded-lg bg-zinc-100 p-0.5">
@@ -340,7 +508,7 @@ export default function AccountDetailPage() {
         </div>
 
         {period === "month" && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button
               type="button"
               variant="outline"
@@ -386,11 +554,21 @@ export default function AccountDetailPage() {
             >
               <ChevronRight />
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              disabled={isCurrentMonth}
+              onClick={goToCurrentPeriod}
+            >
+              Current
+            </Button>
           </div>
         )}
 
         {period === "year" && (
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button
               type="button"
               variant="outline"
@@ -415,6 +593,16 @@ export default function AccountDetailPage() {
             >
               <ChevronRight />
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              disabled={isCurrentYear}
+              onClick={goToCurrentPeriod}
+            >
+              Current
+            </Button>
           </div>
         )}
       </div>
@@ -427,14 +615,20 @@ export default function AccountDetailPage() {
             amount={closing}
           />
         </div>
-        <div className="grid grid-cols-3 divide-x divide-zinc-100 border-b border-zinc-100">
+        <div className="grid grid-cols-2 divide-x divide-y divide-zinc-100 border-b border-zinc-100 sm:grid-cols-3 sm:divide-y-0">
           <MetricCell label="Income" amount={summary.income} tone="income" />
           <MetricCell
             label="Expenses"
             amount={summary.expense}
             tone="expense"
           />
-          <MetricCell label="Net" amount={summary.net} tone={netTone} />
+          <MetricCell
+            label="Net"
+            amount={summary.net}
+            tone={netTone}
+            hero
+            className="col-span-2 sm:col-span-1"
+          />
         </div>
         <div className="grid grid-cols-2 divide-x divide-zinc-100">
           <MetricCell
@@ -476,7 +670,9 @@ export default function AccountDetailPage() {
             </p>
           ) : (
             <>
-              <div className="divide-y divide-zinc-100 md:hidden">
+              <ResponsiveSwitch
+                mobile={
+                  <div className="divide-y divide-zinc-100">
                 {transactions.map((tx) => (
                   <Link
                     key={tx.id}
@@ -492,6 +688,11 @@ export default function AccountDetailPage() {
                           {formatDate(tx.date)} ·{" "}
                           {CATEGORY_LABELS[tx.category] || tx.category}
                         </p>
+                        {tx.description?.trim() ? (
+                          <p className="truncate text-xs text-zinc-500">
+                            {tx.description.trim()}
+                          </p>
+                        ) : null}
                       </div>
                       <StatusBadge status={tx.status} />
                     </div>
@@ -519,16 +720,19 @@ export default function AccountDetailPage() {
                     </p>
                   </Link>
                 ))}
-              </div>
-
-              <div className="hidden md:block">
+                  </div>
+                }
+                desktop={
+                  <div>
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">#</TableHead>
                       <TableHead>ID</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Business</TableHead>
                       <TableHead>Category</TableHead>
+                      <TableHead>Description</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Balance</TableHead>
                       <TableHead>Status</TableHead>
@@ -536,8 +740,11 @@ export default function AccountDetailPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {transactions.map((tx) => (
+                    {transactions.map((tx, index) => (
                       <TableRow key={tx.id}>
+                        <TableCell className="tabular-nums text-zinc-500">
+                          {index + 1}
+                        </TableCell>
                         <TableCell className="font-mono text-xs">
                           {tx.displayId}
                         </TableCell>
@@ -547,6 +754,9 @@ export default function AccountDetailPage() {
                         </TableCell>
                         <TableCell>
                           {CATEGORY_LABELS[tx.category] || tx.category}
+                        </TableCell>
+                        <TableCell className="max-w-[14rem] truncate text-zinc-500">
+                          {tx.description?.trim() || "—"}
                         </TableCell>
                         <TableCell
                           className={
@@ -575,7 +785,9 @@ export default function AccountDetailPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                  </div>
+                }
+              />
               {hasMore && (
                 <div className="flex justify-center border-t border-zinc-100 p-3">
                   <Button

@@ -10,16 +10,17 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role;
     }
 
-    function isStaff() {
-      return signedIn() && userRole() in ['maker', 'checker'];
+    /** Matches who can create/edit pending transactions (maker + checker + approver). */
+    function canManageAttachments() {
+      return signedIn() && userRole() in ['maker', 'checker', 'approver'];
     }
 
     match /transactions/{txId}/{fileName} {
       allow read: if signedIn();
-      allow create, update: if isStaff()
+      allow create, update: if canManageAttachments()
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/(jpeg|png|webp)');
-      allow delete: if isStaff();
+      allow delete: if canManageAttachments();
     }
   }
 }

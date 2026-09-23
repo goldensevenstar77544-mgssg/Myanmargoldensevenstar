@@ -16,7 +16,7 @@ import {
   type User,
 } from "firebase/auth";
 import { getClientAuth, isFirebaseConfigured } from "@/lib/firebase/client";
-import { ensureUserProfile } from "@/lib/firebase/firestore";
+import { ensureUserProfile } from "@/lib/firebase/user-profile";
 import type { AppUser } from "@/lib/types";
 
 interface AuthContextValue {
@@ -31,6 +31,39 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const PROFILE_CACHE_KEY = "g7-profile-cache";
+
+function readCachedProfile(uid: string): AppUser | null {
+  try {
+    const raw = sessionStorage.getItem(PROFILE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AppUser & { createdAt: string };
+    if (parsed.id !== uid) return null;
+    return {
+      ...parsed,
+      createdAt: new Date(parsed.createdAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedProfile(profile: AppUser) {
+  try {
+    sessionStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(profile));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function clearCachedProfile() {
+  try {
+    sessionStorage.removeItem(PROFILE_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const configured = isFirebaseConfigured();
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
@@ -44,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       displayName: user.displayName,
     });
     setProfile(next);
+    writeCachedProfile(next);
   }, []);
 
   useEffect(() => {
@@ -54,14 +88,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (user) {
+        const cached = readCachedProfile(user.uid);
+        if (cached) setProfile(cached);
         try {
           await loadProfile(user);
         } catch (error) {
           console.error("Failed to load user profile", error);
-          setProfile(null);
+          if (!cached) setProfile(null);
         }
       } else {
         setProfile(null);
+        clearCachedProfile();
       }
       setLoading(false);
     });
@@ -75,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     await firebaseSignOut(getClientAuth());
     setProfile(null);
+    clearCachedProfile();
   }, []);
 
   const refreshProfile = useCallback(async () => {

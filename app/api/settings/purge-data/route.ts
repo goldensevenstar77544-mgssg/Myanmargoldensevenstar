@@ -146,6 +146,27 @@ async function resetAccountBalances(db: Firestore): Promise<number> {
   return updated;
 }
 
+async function resetBusinessAccountBalances(db: Firestore): Promise<number> {
+  const snap = await db.collection("businessAccountBalances").get();
+  if (snap.empty) return 0;
+
+  let updated = 0;
+  for (let i = 0; i < snap.docs.length; i += BATCH_LIMIT) {
+    const chunk = snap.docs.slice(i, i + BATCH_LIMIT);
+    const batch = db.batch();
+    for (const doc of chunk) {
+      const opening = Number(doc.data().openingBalance ?? 0);
+      batch.update(doc.ref, {
+        currentBalance: opening,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    updated += chunk.length;
+  }
+  return updated;
+}
+
 async function deleteStoragePrefix(prefix: string): Promise<number> {
   const bucketName =
     process.env.FIREBASE_ADMIN_STORAGE_BUCKET ||
@@ -222,6 +243,8 @@ export async function POST(request: Request) {
       counters: 0,
       files: 0,
       accountsReset: 0,
+      businessAccountBalances: 0,
+      businessAccountBalancesReset: 0,
     };
 
     // Order: transactions (+ summaries/counters/balance reset) → accounts → businesses → auditLogs
@@ -258,7 +281,16 @@ export async function POST(request: Request) {
 
       if (!wantsAccounts) {
         deleted.accountsReset = await resetAccountBalances(db);
+        deleted.businessAccountBalancesReset =
+          await resetBusinessAccountBalances(db);
       }
+    }
+
+    if (wantsAccounts || wantsBusinesses) {
+      deleted.businessAccountBalances = await deleteCollection(
+        db,
+        "businessAccountBalances"
+      );
     }
 
     if (wantsAccounts) {

@@ -237,25 +237,6 @@ export default function NewTransactionPage() {
             {mode === "standard" ? (
               <>
                 <div className="space-y-2">
-                  <Label>Bank / cash</Label>
-                  <Select
-                    value={accountId || undefined}
-                    onValueChange={setAccountId}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select bank or cash account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {accounts.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {formatAccountLabel(a)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
                   <Label>Business</Label>
                   <Select
                     value={businessId || undefined}
@@ -268,6 +249,25 @@ export default function NewTransactionPage() {
                       {businesses.map((b) => (
                         <SelectItem key={b.id} value={b.id}>
                           {b.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Bank / cash</Label>
+                  <Select
+                    value={accountId || undefined}
+                    onValueChange={setAccountId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select bank or cash account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {accounts.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {formatAccountLabel(a)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -319,44 +319,6 @@ export default function NewTransactionPage() {
               <>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label>From account</Label>
-                    <Select
-                      value={fromAccountId || undefined}
-                      onValueChange={setFromAccountId}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Source account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {accounts.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {formatAccountLabel(a)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>To account</Label>
-                    <Select
-                      value={toAccountId || undefined}
-                      onValueChange={setToAccountId}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Destination account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {accounts.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {formatAccountLabel(a)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
                     <Label>From business</Label>
                     <Select
                       value={fromBusinessId || undefined}
@@ -387,6 +349,44 @@ export default function NewTransactionPage() {
                         {businesses.map((b) => (
                           <SelectItem key={b.id} value={b.id}>
                             {b.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>From account</Label>
+                    <Select
+                      value={fromAccountId || undefined}
+                      onValueChange={setFromAccountId}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Source account" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {accounts.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {formatAccountLabel(a)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>To account</Label>
+                    <Select
+                      value={toAccountId || undefined}
+                      onValueChange={setToAccountId}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Destination account" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {accounts.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {formatAccountLabel(a)}
                           </SelectItem>
                         ))}
                       </SelectContent>

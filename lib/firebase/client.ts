@@ -1,7 +1,7 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
-import { getStorage, type FirebaseStorage } from "firebase/storage";
+import type { FirebaseStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -47,8 +47,11 @@ export function getClientDb(): Firestore {
   return db;
 }
 
+/** Lazily loads the Storage SDK so auth/login does not pay for it. */
 export function getClientStorage(): FirebaseStorage {
   if (storage) return storage;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { getStorage } = require("firebase/storage") as typeof import("firebase/storage");
   storage = getStorage(getFirebaseApp());
   return storage;
 }

@@ -56,6 +56,7 @@ const METRIC_LABELS: Record<ComparisonMetric, string> = {
 interface BusinessComparisonChartProps {
   businesses: Business[];
   summaries: Record<string, EntitySummary>;
+  periodLabel?: string;
 }
 
 function metricValue(
@@ -81,6 +82,7 @@ function metricValue(
 export function BusinessComparisonChart({
   businesses,
   summaries,
+  periodLabel,
 }: BusinessComparisonChartProps) {
   const [metric, setMetric] = useState<ComparisonMetric>("fixedAssets");
 
@@ -118,6 +120,7 @@ export function BusinessComparisonChart({
           <CardTitle>Business comparison</CardTitle>
           <CardDescription>
             {metricLabel} by business
+            {periodLabel && metric !== "fixedAssets" ? ` · ${periodLabel}` : ""}
             {hasData ? ` · group ${formatMMK(total)}` : ""}
             {metric !== "fixedAssets" ? " (approved only)" : ""}.
           </CardDescription>
@@ -152,7 +155,7 @@ export function BusinessComparisonChart({
         ) : !hasData ? (
           <p className="py-10 text-center text-sm text-zinc-500">{emptyMessage}</p>
         ) : (
-          <div className="h-80 w-full">
+          <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={data}

@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
-  PiggyBank,
   Receipt,
   ScrollText,
   Settings,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { BrandLogo } from "@/components/brand-logo";
 import { useConfirm } from "@/components/confirm-dialog";
 import { RoleBadge } from "@/components/role-badge";
 import { Button } from "@/components/ui/button";
@@ -57,6 +57,19 @@ function initialsFrom(name?: string | null, email?: string | null) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
   return source.slice(0, 2).toUpperCase();
+}
+
+/** Sticky header label from route — section name for detail paths. */
+function titleFromPathname(pathname: string): string {
+  if (pathname === "/") return "Dashboard";
+  if (pathname.startsWith("/transactions")) return "Transactions";
+  if (pathname.startsWith("/approvals")) return "Approvals";
+  if (pathname.startsWith("/audit")) return "Audit Logs";
+  if (pathname.startsWith("/businesses")) return "Businesses";
+  if (pathname.startsWith("/accounts")) return "Accounts";
+  if (pathname.startsWith("/users")) return "Users";
+  if (pathname.startsWith("/settings")) return "Settings";
+  return "Golden 7";
 }
 
 function NavLink({
@@ -113,7 +126,7 @@ function NavSection({
   if (items.length === 0) return null;
   return (
     <div className="space-y-1">
-      <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-600">
+      <p className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-600">
         {label}
       </p>
       <div className="space-y-0.5">
@@ -226,9 +239,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         aria-label="Navigation menu"
       >
         <div className="flex h-16 shrink-0 items-center gap-3 border-b border-zinc-100 px-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-900 text-white shadow-sm">
-            <PiggyBank className="h-4 w-4" />
-          </div>
+          <BrandLogo sizeClassName="h-9 w-9" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold tracking-tight">
               Golden 7
@@ -296,7 +307,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {drawerOpen && (
         <button
           type="button"
-          className="fixed inset-0 z-30 bg-zinc-900/20 backdrop-blur-[1px] lg:hidden"
+          className="fixed inset-0 z-[35] bg-zinc-900/20 backdrop-blur-[1px] lg:hidden"
           onClick={() => setOpen(false)}
           aria-label="Close overlay"
         />
@@ -315,11 +326,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Menu className="h-5 w-5" />
           </Button>
           <div className="min-w-0 flex-1">
-            <p className="hidden truncate text-sm font-medium text-zinc-700 sm:block">
-              The Golden 7 Myanmar Group
-            </p>
             <p className="truncate text-base font-semibold tracking-tight text-zinc-950">
-              Financial Control Center
+              {titleFromPathname(pathname)}
             </p>
           </div>
         </header>

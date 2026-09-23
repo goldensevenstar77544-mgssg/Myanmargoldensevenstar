@@ -56,7 +56,12 @@ import type {
   TransactionDirection,
 } from "@/lib/types";
 import { CATEGORY_LABELS, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "@/lib/types";
-import { formatDate, formatMMK, formatAccountLabel } from "@/lib/utils";
+import {
+  formatDate,
+  formatDateTime,
+  formatMMK,
+  formatAccountLabel,
+} from "@/lib/utils";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
 import { TransactionAttachments } from "@/components/transaction-attachments";
 import { TransferRoute } from "@/components/transfer-route";
@@ -509,6 +514,12 @@ export default function TransactionDetailPage() {
                   Date
                 </dt>
                 <dd className="mt-1">{formatDate(tx.date)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">
+                  Created
+                </dt>
+                <dd className="mt-1">{formatDateTime(tx.createdAt)}</dd>
               </div>
               <div>
                 <dt className="text-xs uppercase tracking-wide text-zinc-500">

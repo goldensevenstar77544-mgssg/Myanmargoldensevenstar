@@ -13,9 +13,6 @@ import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   Table,
@@ -180,7 +177,8 @@ export default function AccountsPage() {
             Financial accounts
           </h1>
           <p className="text-sm text-zinc-500">
-            Shared group bank accounts and cash in hand — usable by any business.
+            Shared group bank and cash accounts. Balances update when
+            transactions are approved; business is chosen per transaction.
           </p>
         </div>
         {canManage && (
@@ -197,13 +195,6 @@ export default function AccountsPage() {
         </MobileFabStack>
       )}
       <Card>
-        <CardHeader>
-          <CardTitle>Accounts</CardTitle>
-          <CardDescription>
-            Balances update when transactions are approved. Business is chosen
-            per transaction, not per account.
-          </CardDescription>
-        </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <LoadingState variant="page" />
@@ -213,7 +204,10 @@ export default function AccountsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Bank / Account</TableHead>
+                  <TableHead className="w-10">#</TableHead>
+                  <TableHead className="sticky left-0 z-10 bg-zinc-50">
+                    Bank / Account
+                  </TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Details</TableHead>
                   <TableHead>Opening</TableHead>
@@ -225,9 +219,12 @@ export default function AccountsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {accounts.map((account) => (
+                {accounts.map((account, index) => (
                   <TableRow key={account.id}>
-                    <TableCell className="font-medium">
+                    <TableCell className="tabular-nums text-zinc-500">
+                      {index + 1}
+                    </TableCell>
+                    <TableCell className="sticky left-0 z-10 bg-white font-medium">
                       <Link
                         href={`/accounts/${account.id}`}
                         className="text-zinc-900 underline-offset-4 hover:underline"

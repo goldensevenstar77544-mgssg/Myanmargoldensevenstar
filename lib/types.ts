@@ -79,6 +79,17 @@ export interface Account {
   updatedAt: Date;
 }
 
+/** Per-business money held in a shared bank/cash account. */
+export interface BusinessAccountBalance {
+  id: string;
+  businessId: string;
+  accountId: string;
+  openingBalance: number;
+  currentBalance: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface TransactionAttachment {
   path: string;
   url: string;

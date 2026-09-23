@@ -1,16 +1,16 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useAuth } from "@/components/auth-provider";
 import { useConfirm } from "@/components/confirm-dialog";
 import { LoadingState } from "@/components/loading-state";
+import { ResponsiveSwitch } from "@/components/responsive-switch";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -48,7 +48,7 @@ import {
   userDisplayName,
 } from "@/lib/permissions";
 import type { Account, Business, Transaction } from "@/lib/types";
-import { formatDate, formatMMK, formatAccountLabel } from "@/lib/utils";
+import { formatDate, formatMMK, formatAccountLabel, formatTime } from "@/lib/utils";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
 
 /** One row per pending item; transfer pairs collapse to the out (expense) leg. */
@@ -86,6 +86,7 @@ function transferPair(
 
 export default function ApprovalsPage() {
   const { profile } = useAuth();
+  const router = useRouter();
   const confirm = useConfirm();
   const [items, setItems] = useState<Transaction[]>([]);
   const [businesses, setBusinesses] = useState<Business[]>([]);
@@ -239,149 +240,177 @@ export default function ApprovalsPage() {
             <p className="px-4 py-6 text-sm text-zinc-500">No pending transactions.</p>
           ) : (
             <>
-              <div className="divide-y divide-zinc-100 md:hidden">
-                {queue.map((tx) => {
-                  const canAct = canApproveOrReject(profile, tx);
-                  const isOwn = tx.makerId === profile?.id;
-                  return (
-                    <div key={tx.id} className="space-y-3 px-4 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-zinc-950">
-                            {tx.displayId}{" "}
-                            {tx.transferGroupId ? (
-                              <Badge variant="secondary" className="ml-1">
-                                Transfer
-                              </Badge>
-                            ) : null}
-                          </div>
-                          <p className="truncate text-xs text-zinc-500">
-                            {formatDate(tx.date)}
-                          </p>
-                          {tx.transferGroupId ? (
-                            (() => {
-                              const pair = transferPair(tx, items);
-                              return (
-                                <TransferRoute
-                                  className="mt-1"
-                                  compact
-                                  fromBusiness={
-                                    pair?.out?.businessId
-                                      ? businessMap[pair.out.businessId]
-                                      : undefined
-                                  }
-                                  fromAccount={
-                                    pair?.out?.accountId
-                                      ? accountMap[pair.out.accountId]
-                                      : undefined
-                                  }
-                                  toBusiness={
-                                    pair?.inLeg?.businessId
-                                      ? businessMap[pair.inLeg.businessId]
-                                      : undefined
-                                  }
-                                  toAccount={
-                                    pair?.inLeg?.accountId
-                                      ? accountMap[pair.inLeg.accountId]
-                                      : undefined
-                                  }
-                                />
-                              );
-                            })()
-                          ) : (
-                            <p className="truncate text-xs text-zinc-500">
-                              {businessMap[tx.businessId] || "—"} ·{" "}
-                              {accountMap[tx.accountId] || "—"}
-                            </p>
-                          )}
-                        </div>
-                        <StatusBadge status={tx.status} />
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-zinc-500">
-                          {tx.transferGroupId
-                            ? "Transfer"
-                            : tx.direction === "income"
-                              ? "In"
-                              : "Out"}
-                          {isOwn ? " · Own record" : ""}
-                        </span>
-                        <span className="text-sm font-semibold tabular-nums">
-                          {formatMMK(tx.amount)}
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button asChild variant="outline" size="sm" className="w-full">
-                            <Link href={`/transactions/${tx.id}`}>View</Link>
-                          </Button>
-                          {canAct ? (
-                            <Button
-                              size="sm"
-                              className="w-full"
-                              disabled={busy}
-                              onClick={() => onApprove(tx)}
-                            >
-                              Approve
-                            </Button>
-                          ) : (
-                            <div className="flex items-center justify-center rounded-md border border-dashed border-zinc-200 px-2 text-xs text-zinc-400">
-                              View only
-                            </div>
-                          )}
-                        </div>
-                        {canAct && (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => {
-                              setRejecting(tx);
-                              setReason("");
-                            }}
-                            className="w-full py-1 text-center text-xs text-rose-600 underline-offset-2 hover:text-rose-700 hover:underline disabled:opacity-50"
-                          >
-                            Reject
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="hidden md:block">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>ID</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>From / To</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+              <ResponsiveSwitch
+                mobile={
+                  <div className="divide-y divide-zinc-100">
                     {queue.map((tx) => {
                       const canAct = canApproveOrReject(profile, tx);
                       const isOwn = tx.makerId === profile?.id;
+                      const typeLabel = tx.transferGroupId
+                        ? "Transfer"
+                        : tx.direction === "income"
+                          ? "In"
+                          : "Out";
+                      const pair = transferPair(tx, items);
                       return (
-                        <TableRow key={tx.id}>
-                          <TableCell className="font-mono text-xs">
-                            {tx.displayId}
-                            {tx.transferGroupId ? (
-                              <Badge variant="secondary" className="ml-2">
-                                Transfer
-                              </Badge>
-                            ) : null}
-                          </TableCell>
-                          <TableCell>{formatDate(tx.date)}</TableCell>
-                          <TableCell className="max-w-[18rem]">
-                            {tx.transferGroupId ? (
-                              (() => {
-                                const pair = transferPair(tx, items);
-                                return (
+                        <div key={tx.id} className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              router.push(`/transactions/${tx.id}`)
+                            }
+                            className="block w-full space-y-2 px-4 py-3 text-left transition-colors hover:bg-zinc-50 active:bg-zinc-100"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate font-mono text-xs text-zinc-500">
+                                  {tx.displayId}
+                                </p>
+                                {tx.transferGroupId ? (
+                                  <div className="mt-0.5">
+                                    <TransferRoute
+                                      compact
+                                      fromBusiness={
+                                        pair?.out?.businessId
+                                          ? businessMap[pair.out.businessId]
+                                          : undefined
+                                      }
+                                      fromAccount={
+                                        pair?.out?.accountId
+                                          ? accountMap[pair.out.accountId]
+                                          : undefined
+                                      }
+                                      toBusiness={
+                                        pair?.inLeg?.businessId
+                                          ? businessMap[pair.inLeg.businessId]
+                                          : undefined
+                                      }
+                                      toAccount={
+                                        pair?.inLeg?.accountId
+                                          ? accountMap[pair.inLeg.accountId]
+                                          : undefined
+                                      }
+                                    />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <p className="truncate text-sm font-medium text-zinc-950">
+                                      {businessMap[tx.businessId] || "—"}
+                                    </p>
+                                    <p className="truncate text-xs text-zinc-500">
+                                      {accountMap[tx.accountId] || "—"}
+                                    </p>
+                                  </>
+                                )}
+                                <p className="truncate text-xs text-zinc-500">
+                                  {formatDate(tx.date)} · {typeLabel}
+                                  {isOwn ? " · Own record" : ""}
+                                </p>
+                                <p className="truncate text-xs text-zinc-500">
+                                  {formatTime(tx.createdAt)}
+                                </p>
+                                {tx.description?.trim() ? (
+                                  <p className="truncate text-xs text-zinc-500">
+                                    {tx.description.trim()}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <StatusBadge status={tx.status} />
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-xs text-zinc-500">
+                                {tx.makerName || "—"}
+                              </span>
+                              <span
+                                className={
+                                  tx.direction === "income"
+                                    ? "text-sm font-semibold tabular-nums text-emerald-700"
+                                    : "text-sm font-semibold tabular-nums text-rose-700"
+                                }
+                              >
+                                {tx.direction === "income" ? "+" : "−"}
+                                {formatMMK(tx.amount)}
+                              </span>
+                            </div>
+                          </button>
+                          {canAct ? (
+                            <div className="space-y-2 px-4 pb-3">
+                              <Button
+                                size="sm"
+                                className="w-full"
+                                disabled={busy}
+                                onClick={() => onApprove(tx)}
+                              >
+                                Approve
+                              </Button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => {
+                                  setRejecting(tx);
+                                  setReason("");
+                                }}
+                                className="w-full py-1 text-center text-xs text-rose-600 underline-offset-2 hover:text-rose-700 hover:underline disabled:opacity-50"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="px-4 pb-3 text-center text-xs text-zinc-400">
+                              View only
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                }
+                desktop={
+                  <div>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10">#</TableHead>
+                          <TableHead>ID</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>From / To</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Maker</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {queue.map((tx, index) => {
+                          const canAct = canApproveOrReject(profile, tx);
+                          const isOwn = tx.makerId === profile?.id;
+                          const pair = transferPair(tx, items);
+                          return (
+                            <TableRow
+                              key={tx.id}
+                              className="cursor-pointer"
+                              onClick={() =>
+                                router.push(`/transactions/${tx.id}`)
+                              }
+                            >
+                              <TableCell className="tabular-nums text-zinc-500">
+                                {index + 1}
+                              </TableCell>
+                              <TableCell className="font-mono text-xs">
+                                {tx.displayId}
+                              </TableCell>
+                              <TableCell>
+                                <div className="space-y-0.5 leading-snug">
+                                  <p>{formatDate(tx.date)}</p>
+                                  <p className="text-xs text-zinc-500">
+                                    {formatTime(tx.createdAt)}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell className="max-w-[16rem]">
+                                {tx.transferGroupId ? (
                                   <TransferRoute
                                     compact
                                     fromBusiness={
@@ -405,73 +434,88 @@ export default function ApprovalsPage() {
                                         : undefined
                                     }
                                   />
-                                );
-                              })()
-                            ) : (
-                              <div className="space-y-0.5 text-xs leading-snug">
-                                <p className="truncate">
-                                  {businessMap[tx.businessId] || "—"}
-                                </p>
-                                <p className="truncate text-zinc-500">
-                                  {accountMap[tx.accountId] || "—"}
-                                </p>
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {tx.transferGroupId
-                              ? "Transfer"
-                              : tx.direction === "income"
-                                ? "In"
-                                : "Out"}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            {formatMMK(tx.amount)}
-                          </TableCell>
-                          <TableCell>
-                            <StatusBadge status={tx.status} />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex flex-wrap items-center justify-end gap-2">
-                              {isOwn && (
-                                <span className="text-xs text-zinc-400">
-                                  Own record
-                                </span>
-                              )}
-                              <Button asChild variant="outline" size="xs">
-                                <Link href={`/transactions/${tx.id}`}>View</Link>
-                              </Button>
-                              {canAct && (
-                                <>
-                                  <Button
-                                    size="xs"
-                                    disabled={busy}
-                                    onClick={() => onApprove(tx)}
+                                ) : (
+                                  <div className="space-y-0.5 text-xs leading-snug">
+                                    <p className="truncate">
+                                      {businessMap[tx.businessId] || "—"}
+                                    </p>
+                                    <p className="truncate text-zinc-500">
+                                      {accountMap[tx.accountId] || "—"}
+                                    </p>
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {tx.transferGroupId
+                                  ? "Transfer"
+                                  : tx.direction === "income"
+                                    ? "In"
+                                    : "Out"}
+                              </TableCell>
+                              <TableCell className="max-w-[14rem] truncate text-zinc-500">
+                                {tx.description?.trim() || "—"}
+                              </TableCell>
+                              <TableCell
+                                className={
+                                  tx.direction === "income"
+                                    ? "font-medium text-emerald-700"
+                                    : "font-medium text-rose-700"
+                                }
+                              >
+                                {tx.direction === "income" ? "+" : "−"}
+                                {formatMMK(tx.amount)}
+                              </TableCell>
+                              <TableCell>
+                                <StatusBadge status={tx.status} />
+                              </TableCell>
+                              <TableCell className="max-w-[9rem] truncate">
+                                {tx.makerName || "—"}
+                                {isOwn ? (
+                                  <span className="mt-0.5 block text-xs text-zinc-400">
+                                    Own record
+                                  </span>
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {canAct ? (
+                                  <div
+                                    className="flex flex-wrap items-center justify-end gap-2"
+                                    onClick={(e) => e.stopPropagation()}
                                   >
-                                    Approve
-                                  </Button>
-                                  <Button
-                                    size="xs"
-                                    variant="ghost"
-                                    className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-                                    disabled={busy}
-                                    onClick={() => {
-                                      setRejecting(tx);
-                                      setReason("");
-                                    }}
-                                  >
-                                    Reject
-                                  </Button>
-                                </>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
+                                    <Button
+                                      size="xs"
+                                      disabled={busy}
+                                      onClick={() => onApprove(tx)}
+                                    >
+                                      Approve
+                                    </Button>
+                                    <Button
+                                      size="xs"
+                                      variant="ghost"
+                                      className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                                      disabled={busy}
+                                      onClick={() => {
+                                        setRejecting(tx);
+                                        setReason("");
+                                      }}
+                                    >
+                                      Reject
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-zinc-400">
+                                    View only
+                                  </span>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                }
+              />
             </>
           )}
         </CardContent>

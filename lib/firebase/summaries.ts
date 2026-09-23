@@ -1,8 +1,12 @@
 import {
   collection,
   doc,
+  documentId,
   getDoc,
   getDocs,
+  query,
+  where,
+  orderBy,
   type DocumentData,
   type Transaction as FsTransaction,
 } from "firebase/firestore";
@@ -10,7 +14,6 @@ import { getClientDb } from "@/lib/firebase/client";
 import { toDate } from "@/lib/firebase/converters";
 import {
   addTxToBucket,
-  emptyBucket,
   monthKeyFromDate,
   serializeBucket,
   upsertMapBucket,
@@ -132,6 +135,25 @@ export async function getGroupMonthsForYear(
   );
 }
 
+/**
+ * Group month rollups. When `sinceMonthKey` is set (YYYY-MM), only months on
+ * or after that key are fetched.
+ */
+export async function listGroupMonthSummaries(
+  sinceMonthKey?: string | null
+): Promise<GroupMonthSummary[]> {
+  const col = collection(getClientDb(), "summaries", "group", "months");
+  const q = sinceMonthKey
+    ? query(
+        col,
+        where(documentId(), ">=", sinceMonthKey),
+        orderBy(documentId(), "asc")
+      )
+    : query(col, orderBy(documentId(), "asc"));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => mapGroupMonthSummary(d.data(), d.id));
+}
+
 export async function getBusinessSummary(
   businessId: string
 ): Promise<EntitySummary> {
@@ -142,6 +164,12 @@ export async function getBusinessSummary(
   );
 }
 
+/** One collection read for all business rollups (avoids N× getDoc on dashboard). */
+export async function listBusinessSummaries(): Promise<EntitySummary[]> {
+  const snap = await getDocs(collection(getClientDb(), "businessSummaries"));
+  return snap.docs.map((d) => mapEntitySummary(d.data(), d.id));
+}
+
 export async function getAccountSummary(
   accountId: string
 ): Promise<EntitySummary> {
@@ -149,26 +177,54 @@ export async function getAccountSummary(
   return mapEntitySummary(snap.exists() ? snap.data() : undefined, accountId);
 }
 
+/**
+ * Month rollups for a business. When `sinceMonthKey` is set (YYYY-MM), only
+ * months on or after that key are fetched.
+ */
 export async function listBusinessMonthSummaries(
-  businessId: string
+  businessId: string,
+  sinceMonthKey?: string | null
 ): Promise<EntityMonthSummary[]> {
-  const snap = await getDocs(
-    collection(getClientDb(), "businessSummaries", businessId, "months")
+  const col = collection(
+    getClientDb(),
+    "businessSummaries",
+    businessId,
+    "months"
   );
-  return snap.docs
-    .map((d) => mapEntityMonthSummary(d.data(), d.id))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const q = sinceMonthKey
+    ? query(
+        col,
+        where(documentId(), ">=", sinceMonthKey),
+        orderBy(documentId(), "asc")
+      )
+    : query(col, orderBy(documentId(), "asc"));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => mapEntityMonthSummary(d.data(), d.id));
 }
 
+/**
+ * Month rollups for an account. When `sinceMonthKey` is set (YYYY-MM), only
+ * months on or after that key are fetched.
+ */
 export async function listAccountMonthSummaries(
-  accountId: string
+  accountId: string,
+  sinceMonthKey?: string | null
 ): Promise<EntityMonthSummary[]> {
-  const snap = await getDocs(
-    collection(getClientDb(), "accountSummaries", accountId, "months")
+  const col = collection(
+    getClientDb(),
+    "accountSummaries",
+    accountId,
+    "months"
   );
-  return snap.docs
-    .map((d) => mapEntityMonthSummary(d.data(), d.id))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const q = sinceMonthKey
+    ? query(
+        col,
+        where(documentId(), ">=", sinceMonthKey),
+        orderBy(documentId(), "asc")
+      )
+    : query(col, orderBy(documentId(), "asc"));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => mapEntityMonthSummary(d.data(), d.id));
 }
 
 export async function getEntityMonthsForYear(
@@ -176,18 +232,25 @@ export async function getEntityMonthsForYear(
   entityId: string,
   year: number
 ): Promise<EntityMonthSummary[]> {
-  const all =
-    kind === "business"
-      ? await listBusinessMonthSummaries(entityId)
-      : await listAccountMonthSummaries(entityId);
-  const prefix = `${year}-`;
-  const found = new Map(
-    all.filter((m) => m.id.startsWith(prefix)).map((m) => [m.id, m])
-  );
-  return Array.from({ length: 12 }, (_, i) => {
-    const id = `${year}-${String(i + 1).padStart(2, "0")}`;
-    return found.get(id) ?? { id, ...emptyBucket() };
+  const keys = Array.from({ length: 12 }, (_, i) => {
+    const m = String(i + 1).padStart(2, "0");
+    return `${year}-${m}`;
   });
+  const snaps = await Promise.all(
+    keys.map((key) =>
+      getDoc(
+        kind === "business"
+          ? businessMonthRef(entityId, key)
+          : accountMonthRef(entityId, key)
+      )
+    )
+  );
+  return snaps.map((snap, i) =>
+    mapEntityMonthSummary(
+      snap.exists() ? snap.data() : undefined,
+      keys[i]!
+    )
+  );
 }
 
 export type SummaryTxInput = {

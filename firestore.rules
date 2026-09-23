@@ -88,6 +88,16 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /businessAccountBalances/{balanceId} {
+      allow read: if signedIn();
+      allow create, update: if isFinanceStaff()
+        && request.resource.data.businessId is string
+        && request.resource.data.accountId is string
+        && request.resource.data.openingBalance is number
+        && request.resource.data.currentBalance is number;
+      allow delete: if false;
+    }
+
     match /counters/{counterId} {
       allow read, create, update: if signedIn() && (isMaker() || isFinanceStaff());
       allow delete: if false;

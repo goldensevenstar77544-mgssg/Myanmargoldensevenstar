@@ -11,6 +11,7 @@ import { PeriodTrendsChart } from "@/components/account-trends-chart";
 import { DatePicker } from "@/components/date-picker";
 import { LoadingState } from "@/components/loading-state";
 import { PageBackButton } from "@/components/page-back-button";
+import { ResponsiveSwitch } from "@/components/responsive-switch";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -51,23 +58,32 @@ import {
   deleteFixedAsset,
   getBusiness,
   listAccounts,
+  listBusinessAccountBalances,
   listFixedAssets,
   listTransactions,
+  setBusinessOpeningBalances,
   updateFixedAsset,
   type PageCursor,
 } from "@/lib/firebase/firestore";
-import { listBusinessMonthSummaries } from "@/lib/firebase/summaries";
+import {
+  listBusinessMonthSummaries,
+  getBusinessSummary,
+} from "@/lib/firebase/summaries";
 import {
   businessPeriodClosing,
+  businessPeriodOpeningFromLifetime,
   businessPeriodOpeningFromMonths,
   getPeriodBounds,
+  monthSummariesSinceKey,
   summarizeMonthsInPeriod,
   type PeriodKind,
 } from "@/lib/account-period";
+import { bucketFlowNet } from "@/lib/summaries";
 import { canManageMasterData } from "@/lib/permissions";
 import type {
   Account,
   Business,
+  BusinessAccountBalance,
   EntityMonthSummary,
   FixedAsset,
   Transaction,
@@ -101,10 +117,14 @@ function MetricCell({
   label,
   amount,
   tone,
+  hero,
+  className,
 }: {
   label: string;
   amount: number;
   tone?: "income" | "expense" | "neutral";
+  hero?: boolean;
+  className?: string;
 }) {
   const valueTone =
     tone === "income"
@@ -114,14 +134,23 @@ function MetricCell({
         : "text-zinc-950";
 
   return (
-    <div className="min-w-0 px-2.5 py-1.5 sm:px-3">
-      <div className="truncate text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+    <div
+      className={cn(
+        "min-w-0 px-2.5 sm:px-3",
+        hero ? "py-2.5 sm:py-3" : "py-2",
+        className
+      )}
+    >
+      <div className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </div>
       <div
         title={formatMMK(amount)}
         className={cn(
-          "mt-0.5 truncate text-sm font-semibold tracking-tight tabular-nums leading-tight",
+          "mt-0.5 font-semibold tracking-tight tabular-nums leading-tight",
+          hero
+            ? "text-base sm:text-xl md:text-2xl"
+            : "truncate text-base",
           valueTone
         )}
       >
@@ -174,10 +203,12 @@ export default function BusinessDetailPage() {
 
   const [business, setBusiness] = useState<Business | null>(null);
   const [fixedAssets, setFixedAssets] = useState<FixedAsset[]>([]);
+  const [holdings, setHoldings] = useState<BusinessAccountBalance[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [monthSummaries, setMonthSummaries] = useState<EntityMonthSummary[]>(
     []
   );
+  const [lifetimeFlowNet, setLifetimeFlowNet] = useState(0);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [txLoading, setTxLoading] = useState(false);
@@ -197,24 +228,35 @@ export default function BusinessDetailPage() {
   const [assetNotes, setAssetNotes] = useState("");
   const [assetSaving, setAssetSaving] = useState(false);
 
+  const [holdingsOpen, setHoldingsOpen] = useState(false);
+  const [openingEdits, setOpeningEdits] = useState<Record<string, string>>({});
+  const [holdingsSaving, setHoldingsSaving] = useState(false);
+
   const bounds = useMemo(
     () => getPeriodBounds(period, year, month),
+    [period, year, month]
+  );
+
+  const sinceMonthKey = useMemo(
+    () => monthSummariesSinceKey(period, year, month),
     [period, year, month]
   );
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [biz, acc, months, assets] = await Promise.all([
+      const [biz, acc, assets, balances, entitySummary] = await Promise.all([
         getBusiness(id),
         listAccounts(),
-        listBusinessMonthSummaries(id),
         listFixedAssets(id),
+        listBusinessAccountBalances(id),
+        getBusinessSummary(id),
       ]);
       setBusiness(biz);
       setAccounts(acc);
-      setMonthSummaries(months);
       setFixedAssets(assets);
+      setHoldings(balances);
+      setLifetimeFlowNet(bucketFlowNet(entitySummary));
     } catch (error) {
       console.error(error);
       toast.error("Failed to load business");
@@ -224,6 +266,87 @@ export default function BusinessDetailPage() {
   }, [id]);
 
   useLoadOnMount(load);
+
+  useEffect(() => {
+    let cancelled = false;
+    listBusinessMonthSummaries(id, sinceMonthKey)
+      .then((months) => {
+        if (!cancelled) setMonthSummaries(months);
+      })
+      .catch((error) => {
+        console.error(error);
+        if (!cancelled) toast.error("Failed to load period summaries");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, sinceMonthKey]);
+
+  const activeAccounts = useMemo(
+    () => accounts.filter((a) => a.status === "active"),
+    [accounts]
+  );
+
+  const holdingsByAccount = useMemo(() => {
+    return Object.fromEntries(holdings.map((h) => [h.accountId, h]));
+  }, [holdings]);
+
+  const holdingsTotalOpening = useMemo(
+    () => holdings.reduce((sum, h) => sum + h.openingBalance, 0),
+    [holdings]
+  );
+
+  const holdingsTotalCurrent = useMemo(
+    () => holdings.reduce((sum, h) => sum + h.currentBalance, 0),
+    [holdings]
+  );
+
+  const editOpeningTotal = useMemo(() => {
+    return activeAccounts.reduce((sum, account) => {
+      return sum + (Number(openingEdits[account.id]) || 0);
+    }, 0);
+  }, [activeAccounts, openingEdits]);
+
+  function openEditHoldings() {
+    const next: Record<string, string> = {};
+    for (const account of activeAccounts) {
+      const existing = holdingsByAccount[account.id];
+      next[account.id] = existing ? String(existing.openingBalance) : "";
+    }
+    setOpeningEdits(next);
+    setHoldingsOpen(true);
+  }
+
+  async function onSaveHoldings(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await confirm({
+      title: "Update opening capital?",
+      description:
+        "Changes are applied to this business’s holdings and the shared bank or cash balances.",
+      confirmLabel: "Save openings",
+    });
+    if (!ok) return;
+    setHoldingsSaving(true);
+    try {
+      const allocations = activeAccounts.map((account) => ({
+        accountId: account.id,
+        amount: Number(openingEdits[account.id]) || 0,
+      }));
+      await setBusinessOpeningBalances(id, allocations);
+      toast.success("Opening capital updated");
+      setHoldingsOpen(false);
+      await load();
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not update opening capital"
+      );
+    } finally {
+      setHoldingsSaving(false);
+    }
+  }
 
   function openCreateAsset() {
     setEditingAsset(null);
@@ -346,10 +469,21 @@ export default function BusinessDetailPage() {
     [accounts]
   );
 
-  const opening = useMemo(
-    () => businessPeriodOpeningFromMonths(monthSummaries, bounds.start),
-    [monthSummaries, bounds.start]
-  );
+  const opening = useMemo(() => {
+    if (!bounds.start) {
+      return businessPeriodOpeningFromMonths(
+        holdingsTotalOpening,
+        monthSummaries,
+        null
+      );
+    }
+    return businessPeriodOpeningFromLifetime(
+      holdingsTotalOpening,
+      lifetimeFlowNet,
+      monthSummaries,
+      bounds.start
+    );
+  }, [holdingsTotalOpening, monthSummaries, bounds.start, lifetimeFlowNet]);
 
   const summary = useMemo(
     () => summarizeMonthsInPeriod(monthSummaries, period, year, month),
@@ -357,8 +491,14 @@ export default function BusinessDetailPage() {
   );
 
   const closing = useMemo(
-    () => businessPeriodClosing(opening, summary.flowNet),
-    [opening, summary.flowNet]
+    () =>
+      businessPeriodClosing(
+        opening,
+        summary.flowNet,
+        period,
+        holdingsTotalCurrent
+      ),
+    [opening, summary.flowNet, period, holdingsTotalCurrent]
   );
 
   function shiftMonth(delta: number) {
@@ -370,6 +510,13 @@ export default function BusinessDetailPage() {
   const canGoNextMonth =
     year < currentYear || (year === currentYear && month < currentMonth);
   const canGoNextYear = year < currentYear;
+  const isCurrentMonth = year === currentYear && month === currentMonth;
+  const isCurrentYear = year === currentYear;
+
+  function goToCurrentPeriod() {
+    setYear(currentYear);
+    setMonth(currentMonth);
+  }
 
   if (loading) {
     return <LoadingState variant="inline" />;
@@ -410,84 +557,482 @@ export default function BusinessDetailPage() {
         <p className="text-sm text-zinc-500">
           {business.notes?.trim() || "No notes"}
         </p>
+        <p className="text-2xl font-semibold tracking-tight tabular-nums text-zinc-950">
+          {formatMMK(holdingsTotalCurrent)}
+        </p>
+        <p className="text-xs text-zinc-500">
+          Opening{" "}
+          {formatMMK(business.totalCapital ?? holdingsTotalOpening)} · Fixed
+          assets {formatMMK(business.fixedAssetExpense ?? 0)}
+        </p>
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 py-3">
-          <div>
-            <CardTitle className="text-base">Fixed assets</CardTitle>
-            <CardDescription className="text-xs">
-              Total {formatMMK(business.fixedAssetExpense ?? 0)}
-              {fixedAssets.length > 0
-                ? ` · ${fixedAssets.length} item${fixedAssets.length === 1 ? "" : "s"}`
-                : ""}
-            </CardDescription>
-          </div>
-          {canManage && (
-            <Button size="sm" onClick={openCreateAsset}>
-              <Plus className="h-4 w-4" />
-              Add asset
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <div className="flex rounded-lg bg-zinc-100 p-0.5">
+          <PeriodSegment value="month" period={period} onChange={setPeriod} />
+          <PeriodSegment value="year" period={period} onChange={setPeriod} />
+          <PeriodSegment value="all" period={period} onChange={setPeriod} />
+        </div>
+
+        {period === "month" && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              aria-label="Previous month"
+              onClick={() => shiftMonth(-1)}
+            >
+              <ChevronLeft />
             </Button>
-          )}
-        </CardHeader>
-        <CardContent className="p-0">
-          {fixedAssets.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-zinc-500">
-              No fixed assets yet.
-              {canManage ? " Add the first asset for this business." : ""}
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Notes</TableHead>
-                  {canManage && (
-                    <TableHead className="text-right">Actions</TableHead>
-                  )}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {fixedAssets.map((asset) => (
-                  <TableRow key={asset.id}>
-                    <TableCell className="font-medium">{asset.name}</TableCell>
-                    <TableCell>{formatDate(asset.date)}</TableCell>
-                    <TableCell className="tabular-nums">
-                      {formatMMK(asset.amount)}
-                    </TableCell>
-                    <TableCell className="max-w-[12rem] truncate text-zinc-500">
-                      {asset.notes?.trim() || "—"}
-                    </TableCell>
+            <Select
+              value={String(month)}
+              onValueChange={(v) => setMonth(Number(v))}
+            >
+              <SelectTrigger className="h-9 w-[4.5rem]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTH_OPTIONS.map((opt) => (
+                  <SelectItem
+                    key={opt.value}
+                    value={String(opt.value)}
+                    disabled={
+                      year === currentYear && opt.value > currentMonth
+                    }
+                  >
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="min-w-12 text-center text-sm font-medium tabular-nums">
+              {year}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              aria-label="Next month"
+              disabled={!canGoNextMonth}
+              onClick={() => shiftMonth(1)}
+            >
+              <ChevronRight />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              disabled={isCurrentMonth}
+              onClick={goToCurrentPeriod}
+            >
+              Current
+            </Button>
+          </div>
+        )}
+
+        {period === "year" && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              aria-label="Previous year"
+              onClick={() => setYear((y) => y - 1)}
+            >
+              <ChevronLeft />
+            </Button>
+            <span className="min-w-14 text-center text-sm font-medium tabular-nums">
+              {year}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              aria-label="Next year"
+              disabled={!canGoNextYear}
+              onClick={() => setYear((y) => Math.min(currentYear, y + 1))}
+            >
+              <ChevronRight />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              disabled={isCurrentYear}
+              onClick={goToCurrentPeriod}
+            >
+              Current
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <Tabs defaultValue="activity">
+        <TabsList>
+          <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="history">History</TabsTrigger>
+          <TabsTrigger value="holdings">Holdings</TabsTrigger>
+          <TabsTrigger value="assets">Fixed assets</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="holdings">
+        <Card>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 py-3">
+            <div>
+              <CardTitle className="text-base">Bank and cash holdings</CardTitle>
+              <CardDescription className="text-xs">
+                Opening {formatMMK(business.totalCapital ?? holdingsTotalOpening)}
+                {" · "}
+                Current {formatMMK(holdingsTotalCurrent)}
+              </CardDescription>
+            </div>
+            {canManage && (
+              <Button size="sm" variant="outline" onClick={openEditHoldings}>
+                Edit openings
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="p-0">
+            {holdings.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-zinc-500">
+                No capital allocated yet.
+                {canManage
+                  ? " Set opening amounts across shared bank and cash accounts."
+                  : ""}
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">#</TableHead>
+                    <TableHead>Account</TableHead>
+                    <TableHead>Opening</TableHead>
+                    <TableHead>Current</TableHead>
+                    <TableHead className="text-right">Share</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {holdings.map((holding, index) => {
+                    const share =
+                      holdingsTotalCurrent > 0
+                        ? (holding.currentBalance / holdingsTotalCurrent) * 100
+                        : 0;
+                    return (
+                      <TableRow key={holding.id}>
+                        <TableCell className="tabular-nums text-zinc-500">
+                          {index + 1}
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {accountMap[holding.accountId] ?? holding.accountId}
+                        </TableCell>
+                        <TableCell className="tabular-nums">
+                          {formatMMK(holding.openingBalance)}
+                        </TableCell>
+                        <TableCell className="tabular-nums">
+                          {formatMMK(holding.currentBalance)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-zinc-500">
+                          {share.toFixed(1)}%
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+        </TabsContent>
+
+        <TabsContent value="assets">
+        <Card>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 py-3">
+            <div>
+              <CardTitle className="text-base">Fixed assets</CardTitle>
+              <CardDescription className="text-xs">
+                Total {formatMMK(business.fixedAssetExpense ?? 0)}
+                {fixedAssets.length > 0
+                  ? ` · ${fixedAssets.length} item${fixedAssets.length === 1 ? "" : "s"}`
+                  : ""}
+              </CardDescription>
+            </div>
+            {canManage && (
+              <Button size="sm" onClick={openCreateAsset}>
+                <Plus className="h-4 w-4" />
+                Add asset
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="p-0">
+            {fixedAssets.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-zinc-500">
+                No fixed assets yet.
+                {canManage ? " Add the first asset for this business." : ""}
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">#</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Notes</TableHead>
                     {canManage && (
-                      <TableCell className="text-right">
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="xs"
-                            onClick={() => openEditAsset(asset)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-                            onClick={() => void onDeleteAsset(asset)}
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </TableCell>
+                      <TableHead className="text-right">Actions</TableHead>
                     )}
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                </TableHeader>
+                <TableBody>
+                  {fixedAssets.map((asset, index) => (
+                    <TableRow key={asset.id}>
+                      <TableCell className="tabular-nums text-zinc-500">
+                        {index + 1}
+                      </TableCell>
+                      <TableCell className="font-medium">{asset.name}</TableCell>
+                      <TableCell>{formatDate(asset.date)}</TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatMMK(asset.amount)}
+                      </TableCell>
+                      <TableCell className="max-w-[12rem] truncate text-zinc-500">
+                        {asset.notes?.trim() || "—"}
+                      </TableCell>
+                      {canManage && (
+                        <TableCell className="text-right">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={() => openEditAsset(asset)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                              onClick={() => void onDeleteAsset(asset)}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+        </TabsContent>
+
+        <TabsContent value="activity">
+
+        <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+          <div className="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100">
+            <MetricCell label="Opening" amount={opening} />
+            <MetricCell label="Closing" amount={closing} />
+          </div>
+          <div className="grid grid-cols-2 divide-x divide-y divide-zinc-100 border-b border-zinc-100 sm:grid-cols-3 sm:divide-y-0">
+            <MetricCell label="Income" amount={summary.income} tone="income" />
+            <MetricCell
+              label="Expenses"
+              amount={summary.expense}
+              tone="expense"
+            />
+            <MetricCell
+              label="Net"
+              amount={summary.net}
+              tone={netTone}
+              hero
+              className="col-span-2 sm:col-span-1"
+            />
+          </div>
+          <div className="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100">
+            <MetricCell
+              label="Transfer in"
+              amount={summary.transferIn}
+              tone="income"
+            />
+            <MetricCell
+              label="Transfer out"
+              amount={summary.transferOut}
+              tone="expense"
+            />
+          </div>
+          <div className="grid grid-cols-2 divide-x divide-zinc-100">
+            <MetricCell
+              label="Total credit"
+              amount={summary.income + summary.transferIn}
+              tone="income"
+            />
+            <MetricCell
+              label="Total debit"
+              amount={summary.expense + summary.transferOut}
+              tone="expense"
+            />
+          </div>
+        </div>
+
+        <PeriodTrendsChart
+          entityId={business.id}
+          matchField="businessId"
+          transactions={transactions}
+          monthSummaries={monthSummaries}
+          period={period}
+          year={year}
+          month={month}
+          periodLabel={bounds.label}
+          title="Business trends"
+        />
+        </TabsContent>
+
+        <TabsContent value="history">
+
+        <Card>
+          <CardHeader className="space-y-1 py-3">
+            <CardTitle className="text-base">Transaction history</CardTitle>
+            <CardDescription className="text-xs">
+              Transactions for {bounds.label} on this business.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            {txLoading && transactions.length === 0 ? (
+              <LoadingState variant="inline" />
+            ) : transactions.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-zinc-500">
+                No transactions for {bounds.label}.
+              </p>
+            ) : (
+              <>
+                <ResponsiveSwitch
+                  mobile={
+                    <div className="divide-y divide-zinc-100">
+                  {transactions.map((tx) => (
+                    <Link
+                      key={tx.id}
+                      href={`/transactions/${tx.id}`}
+                      className="block space-y-2 px-4 py-3 transition-colors hover:bg-zinc-50 active:bg-zinc-100"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-zinc-950">
+                            {accountMap[tx.accountId] || "—"}
+                          </p>
+                          <p className="truncate text-xs text-zinc-500">
+                            {formatDate(tx.date)} ·{" "}
+                            {CATEGORY_LABELS[tx.category] || tx.category}
+                          </p>
+                          {tx.description?.trim() ? (
+                            <p className="truncate text-xs text-zinc-500">
+                              {tx.description.trim()}
+                            </p>
+                          ) : null}
+                        </div>
+                        <StatusBadge status={tx.status} />
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-zinc-500">
+                          {tx.direction === "income" ? "In" : "Out"}
+                        </span>
+                        <span
+                          className={
+                            tx.direction === "income"
+                              ? "text-sm font-semibold tabular-nums text-emerald-700"
+                              : "text-sm font-semibold tabular-nums text-rose-700"
+                          }
+                        >
+                          {tx.direction === "income" ? "+" : "−"}
+                          {formatMMK(tx.amount)}
+                        </span>
+                      </div>
+                    </Link>
+                  ))}
+                    </div>
+                  }
+                  desktop={
+                    <div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-10">#</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {transactions.map((tx, index) => (
+                        <TableRow key={tx.id}>
+                          <TableCell className="tabular-nums text-zinc-500">
+                            {index + 1}
+                          </TableCell>
+                          <TableCell>{formatDate(tx.date)}</TableCell>
+                          <TableCell>
+                            {accountMap[tx.accountId] || "—"}
+                          </TableCell>
+                          <TableCell>
+                            {CATEGORY_LABELS[tx.category] || tx.category}
+                          </TableCell>
+                          <TableCell className="max-w-[14rem] truncate text-zinc-500">
+                            {tx.description?.trim() || "—"}
+                          </TableCell>
+                          <TableCell
+                            className={
+                              tx.direction === "income"
+                                ? "font-medium text-emerald-700"
+                                : "font-medium text-rose-700"
+                            }
+                          >
+                            {tx.direction === "income" ? "+" : "−"}
+                            {formatMMK(tx.amount)}
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={tx.status} />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button asChild variant="outline" size="xs">
+                              <Link href={`/transactions/${tx.id}`}>View</Link>
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                    </div>
+                  }
+                />
+                {hasMore && (
+                  <div className="flex justify-center border-t border-zinc-100 p-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={txLoading}
+                      onClick={() => void loadTransactions(true, cursor)}
+                    >
+                      {txLoading ? "Loading…" : "Load more"}
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={assetOpen} onOpenChange={setAssetOpen}>
         <DialogContent>
@@ -553,249 +1098,75 @@ export default function BusinessDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-        <div className="flex rounded-lg bg-zinc-100 p-0.5">
-          <PeriodSegment value="month" period={period} onChange={setPeriod} />
-          <PeriodSegment value="year" period={period} onChange={setPeriod} />
-          <PeriodSegment value="all" period={period} onChange={setPeriod} />
-        </div>
-
-        {period === "month" && (
-          <div className="flex items-center gap-1.5">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="h-9 w-9"
-              aria-label="Previous month"
-              onClick={() => shiftMonth(-1)}
-            >
-              <ChevronLeft />
-            </Button>
-            <Select
-              value={String(month)}
-              onValueChange={(v) => setMonth(Number(v))}
-            >
-              <SelectTrigger className="h-9 w-[4.5rem]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MONTH_OPTIONS.map((opt) => (
-                  <SelectItem
-                    key={opt.value}
-                    value={String(opt.value)}
-                    disabled={
-                      year === currentYear && opt.value > currentMonth
-                    }
+      <Dialog open={holdingsOpen} onOpenChange={setHoldingsOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <form onSubmit={onSaveHoldings}>
+            <DialogHeader>
+              <DialogTitle>Edit opening capital</DialogTitle>
+            </DialogHeader>
+            <div className="mt-4 space-y-3">
+              <p className="text-sm text-zinc-500">
+                Changes add or remove capital from shared bank and cash
+                accounts for this business.
+              </p>
+              {activeAccounts.length === 0 ? (
+                <p className="text-sm text-zinc-500">
+                  No active accounts available.
+                </p>
+              ) : (
+                activeAccounts.map((account) => (
+                  <div
+                    key={account.id}
+                    className="flex items-center justify-between gap-3"
                   >
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <span className="min-w-12 text-center text-sm font-medium tabular-nums">
-              {year}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="h-9 w-9"
-              aria-label="Next month"
-              disabled={!canGoNextMonth}
-              onClick={() => shiftMonth(1)}
-            >
-              <ChevronRight />
-            </Button>
-          </div>
-        )}
-
-        {period === "year" && (
-          <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="h-9 w-9"
-              aria-label="Previous year"
-              onClick={() => setYear((y) => y - 1)}
-            >
-              <ChevronLeft />
-            </Button>
-            <span className="min-w-14 text-center text-sm font-medium tabular-nums">
-              {year}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="h-9 w-9"
-              aria-label="Next year"
-              disabled={!canGoNextYear}
-              onClick={() => setYear((y) => Math.min(currentYear, y + 1))}
-            >
-              <ChevronRight />
-            </Button>
-          </div>
-        )}
-      </div>
-
-      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-        <div className="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100">
-          <MetricCell label="Opening" amount={opening} />
-          <MetricCell label="Closing" amount={closing} />
-        </div>
-        <div className="grid grid-cols-3 divide-x divide-zinc-100 border-b border-zinc-100">
-          <MetricCell label="Income" amount={summary.income} tone="income" />
-          <MetricCell
-            label="Expenses"
-            amount={summary.expense}
-            tone="expense"
-          />
-          <MetricCell label="Net" amount={summary.net} tone={netTone} />
-        </div>
-        <div className="grid grid-cols-2 divide-x divide-zinc-100">
-          <MetricCell
-            label="Transfer in"
-            amount={summary.transferIn}
-            tone="income"
-          />
-          <MetricCell
-            label="Transfer out"
-            amount={summary.transferOut}
-            tone="expense"
-          />
-        </div>
-      </div>
-
-      <PeriodTrendsChart
-        entityId={business.id}
-        matchField="businessId"
-        transactions={transactions}
-        monthSummaries={monthSummaries}
-        period={period}
-        year={year}
-        month={month}
-        periodLabel={bounds.label}
-        title="Business trends"
-      />
-
-      <Card>
-        <CardHeader className="space-y-1 py-3">
-          <CardTitle className="text-base">Transaction history</CardTitle>
-          <CardDescription className="text-xs">
-            Transactions for {bounds.label} on this business.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          {txLoading && transactions.length === 0 ? (
-            <LoadingState variant="inline" />
-          ) : transactions.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-zinc-500">
-              No transactions for {bounds.label}.
-            </p>
-          ) : (
-            <>
-              <div className="divide-y divide-zinc-100 md:hidden">
-                {transactions.map((tx) => (
-                  <Link
-                    key={tx.id}
-                    href={`/transactions/${tx.id}`}
-                    className="block space-y-2 px-4 py-3 transition-colors hover:bg-zinc-50 active:bg-zinc-100"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-zinc-950">
-                          {accountMap[tx.accountId] || "—"}
-                        </p>
-                        <p className="truncate text-xs text-zinc-500">
-                          {formatDate(tx.date)} ·{" "}
-                          {CATEGORY_LABELS[tx.category] || tx.category}
-                        </p>
-                      </div>
-                      <StatusBadge status={tx.status} />
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-zinc-500">
-                        {tx.direction === "income" ? "In" : "Out"}
-                      </span>
-                      <span
-                        className={
-                          tx.direction === "income"
-                            ? "text-sm font-semibold tabular-nums text-emerald-700"
-                            : "text-sm font-semibold tabular-nums text-rose-700"
-                        }
-                      >
-                        {tx.direction === "income" ? "+" : "−"}
-                        {formatMMK(tx.amount)}
-                      </span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-
-              <div className="hidden md:block">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Account</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {transactions.map((tx) => (
-                      <TableRow key={tx.id}>
-                        <TableCell>{formatDate(tx.date)}</TableCell>
-                        <TableCell>
-                          {accountMap[tx.accountId] || "—"}
-                        </TableCell>
-                        <TableCell>
-                          {CATEGORY_LABELS[tx.category] || tx.category}
-                        </TableCell>
-                        <TableCell
-                          className={
-                            tx.direction === "income"
-                              ? "font-medium text-emerald-700"
-                              : "font-medium text-rose-700"
-                          }
-                        >
-                          {tx.direction === "income" ? "+" : "−"}
-                          {formatMMK(tx.amount)}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={tx.status} />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button asChild variant="outline" size="xs">
-                            <Link href={`/transactions/${tx.id}`}>View</Link>
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-              {hasMore && (
-                <div className="flex justify-center border-t border-zinc-100 p-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={txLoading}
-                    onClick={() => void loadTransactions(true, cursor)}
-                  >
-                    {txLoading ? "Loading…" : "Load more"}
-                  </Button>
-                </div>
+                    <Label
+                      htmlFor={`holding-opening-${account.id}`}
+                      className="min-w-0 flex-1 truncate text-sm font-normal"
+                    >
+                      {formatAccountLabel(account)}
+                    </Label>
+                    <Input
+                      id={`holding-opening-${account.id}`}
+                      type="number"
+                      min={0}
+                      step="1"
+                      inputMode="decimal"
+                      className="w-32 shrink-0"
+                      value={openingEdits[account.id] ?? ""}
+                      placeholder="0"
+                      onChange={(e) =>
+                        setOpeningEdits((prev) => ({
+                          ...prev,
+                          [account.id]: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                ))
               )}
-            </>
-          )}
-        </CardContent>
-      </Card>
+              <p className="text-sm text-zinc-600">
+                Total capital{" "}
+                <span className="font-medium text-zinc-900">
+                  {formatMMK(editOpeningTotal)}
+                </span>
+              </p>
+            </div>
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setHoldingsOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={holdingsSaving}>
+                {holdingsSaving ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }

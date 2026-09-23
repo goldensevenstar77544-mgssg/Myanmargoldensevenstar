@@ -9,7 +9,7 @@ function Badge({ className, variant = "default", ...props }: BadgeProps) {
   return (
     <div
       className={cn(
-        "inline-flex items-center rounded-md border px-2 py-0 text-[11px] font-semibold transition-colors",
+        "inline-flex items-center rounded-md border px-2 py-0 text-xs font-semibold transition-colors",
         variant === "default" && "border-transparent bg-zinc-900 text-zinc-50",
         variant === "secondary" && "border-transparent bg-zinc-100 text-zinc-900",
         variant === "outline" && "text-zinc-950",

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { useAuth } from "@/components/auth-provider";
 import { LoadingState } from "@/components/loading-state";
+import { ResponsiveSwitch } from "@/components/responsive-switch";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -116,6 +117,27 @@ type AuditDisplayItem =
 function groupAuditLogs(items: AuditLog[]): AuditDisplayItem[] {
   const used = new Set<string>();
   const result: AuditDisplayItem[] = [];
+  const byGroupActionActor = new Map<string, AuditLog[]>();
+  const byEntityId = new Map<string, AuditLog[]>();
+  const byLinkedTarget = new Map<string, AuditLog[]>();
+
+  for (const log of items) {
+    const key = transferGroupKey(log);
+    if (key) {
+      const mapKey = `${key}|${log.action}|${log.actorId}`;
+      const list = byGroupActionActor.get(mapKey);
+      if (list) list.push(log);
+      else byGroupActionActor.set(mapKey, [log]);
+    }
+    const entityList = byEntityId.get(log.entityId);
+    if (entityList) entityList.push(log);
+    else byEntityId.set(log.entityId, [log]);
+    if (log.linkedTransactionId) {
+      const linkedList = byLinkedTarget.get(log.linkedTransactionId);
+      if (linkedList) linkedList.push(log);
+      else byLinkedTarget.set(log.linkedTransactionId, [log]);
+    }
+  }
 
   for (const log of items) {
     if (used.has(log.id)) continue;
@@ -126,40 +148,41 @@ function groupAuditLogs(items: AuditLog[]): AuditDisplayItem[] {
       continue;
     }
 
-    const siblings = items.filter((other) => {
-      if (used.has(other.id)) return false;
-      if (transferGroupKey(other) === key) return true;
-      // Pair legs that point at each other when only one side has group metadata.
-      if (
-        log.linkedTransactionId &&
-        other.entityId === log.linkedTransactionId &&
-        other.action === log.action &&
-        other.actorId === log.actorId
-      ) {
-        return true;
-      }
-      if (
-        other.linkedTransactionId &&
-        other.linkedTransactionId === log.entityId &&
-        other.action === log.action &&
-        other.actorId === log.actorId
-      ) {
-        return true;
-      }
-      return false;
-    });
-    siblings.forEach((s) => used.add(s.id));
+    const mapKey = `${key}|${log.action}|${log.actorId}`;
+    const siblings = new Map<string, AuditLog>();
+    for (const s of byGroupActionActor.get(mapKey) ?? []) {
+      if (!used.has(s.id)) siblings.set(s.id, s);
+    }
 
-    if (siblings.length === 1) {
-      result.push({ kind: "single", log: siblings[0]! });
+    // Pair legs that point at each other when only one side has group metadata.
+    if (log.linkedTransactionId) {
+      for (const other of byEntityId.get(log.linkedTransactionId) ?? []) {
+        if (used.has(other.id) || siblings.has(other.id)) continue;
+        if (other.action === log.action && other.actorId === log.actorId) {
+          siblings.set(other.id, other);
+        }
+      }
+    }
+    for (const other of byLinkedTarget.get(log.entityId) ?? []) {
+      if (used.has(other.id) || siblings.has(other.id)) continue;
+      if (other.action === log.action && other.actorId === log.actorId) {
+        siblings.set(other.id, other);
+      }
+    }
+
+    const siblingList = [...siblings.values()];
+    siblingList.forEach((s) => used.add(s.id));
+
+    if (siblingList.length === 1) {
+      result.push({ kind: "single", log: siblingList[0]! });
       continue;
     }
 
     const out =
-      siblings.find((s) => s.direction === "expense") ?? siblings[0];
+      siblingList.find((s) => s.direction === "expense") ?? siblingList[0];
     const inLeg =
-      siblings.find((s) => s.direction === "income") ??
-      siblings.find((s) => s.id !== out?.id);
+      siblingList.find((s) => s.direction === "income") ??
+      siblingList.find((s) => s.id !== out?.id);
 
     result.push({
       kind: "transfer",
@@ -167,7 +190,7 @@ function groupAuditLogs(items: AuditLog[]): AuditDisplayItem[] {
       action: log.action,
       out,
       inLeg,
-      logs: siblings,
+      logs: siblingList,
     });
   }
 
@@ -494,7 +517,16 @@ export default function AuditPage() {
               Entity
             </Label>
             <Select value={entityType} onValueChange={setEntityType}>
-              <SelectTrigger className="h-9 min-w-0 px-2.5 text-xs sm:h-10 sm:px-3 sm:text-sm [&>span]:truncate">
+              <SelectTrigger
+                title={
+                  entityType === "all"
+                    ? "All"
+                    : entityType === "transaction"
+                      ? "Transaction"
+                      : "User"
+                }
+                className="h-9 min-w-0 px-2.5 text-xs sm:h-10 sm:px-3 sm:text-sm [&>span]:truncate"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -509,7 +541,14 @@ export default function AuditPage() {
               Action
             </Label>
             <Select value={action} onValueChange={setAction}>
-              <SelectTrigger className="h-9 min-w-0 px-2.5 text-xs sm:h-10 sm:px-3 sm:text-sm [&>span]:truncate">
+              <SelectTrigger
+                title={
+                  action === "all"
+                    ? "All"
+                    : action.charAt(0).toUpperCase() + action.slice(1)
+                }
+                className="h-9 min-w-0 px-2.5 text-xs sm:h-10 sm:px-3 sm:text-sm [&>span]:truncate"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -567,7 +606,9 @@ export default function AuditPage() {
             </p>
           ) : (
             <>
-              <div className="divide-y divide-zinc-100 md:hidden">
+              <ResponsiveSwitch
+                mobile={
+                  <div className="divide-y divide-zinc-100">
                 {displayItems.map((item) => {
                   const primary = displayPrimary(item);
                   const logs =
@@ -657,12 +698,14 @@ export default function AuditPage() {
                     </div>
                   );
                 })}
-              </div>
-
-              <div className="hidden md:block">
+                  </div>
+                }
+                desktop={
+                  <div>
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">#</TableHead>
                       <TableHead>When</TableHead>
                       <TableHead>Entity</TableHead>
                       <TableHead>Action</TableHead>
@@ -675,7 +718,7 @@ export default function AuditPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {displayItems.map((item) => {
+                    {displayItems.map((item, index) => {
                       const primary = displayPrimary(item);
                       const logs =
                         item.kind === "transfer" ? item.logs : [item.log];
@@ -687,6 +730,9 @@ export default function AuditPage() {
                             item.kind === "transfer" ? item.key : item.log.id
                           }
                         >
+                          <TableCell className="tabular-nums text-zinc-500">
+                            {index + 1}
+                          </TableCell>
                           <TableCell className="whitespace-nowrap text-sm">
                             {formatDateTime(primary.createdAt)}
                           </TableCell>
@@ -771,7 +817,9 @@ export default function AuditPage() {
                     })}
                   </TableBody>
                 </Table>
-              </div>
+                  </div>
+                }
+              />
               {hasMore && (
                 <div className="flex justify-center border-t border-zinc-100 p-3">
                   <Button

@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import { Users, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { useConfirm } from "@/components/confirm-dialog";
 import { LoadingState } from "@/components/loading-state";
@@ -172,8 +172,11 @@ export default function UsersPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
           <p className="text-sm text-zinc-500">
-            Create Maker, Checker, and Approver accounts. Share the initial
-            password securely.
+            Create Maker, Checker, and Approver accounts
+            {users.length > 0
+              ? ` · ${users.length} user${users.length === 1 ? "" : "s"}`
+              : ""}
+            . Share the initial password securely.
           </p>
         </div>
         {canManage && (
@@ -190,15 +193,6 @@ export default function UsersPage() {
         </MobileFabStack>
       )}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Team accounts
-          </CardTitle>
-          <CardDescription>
-            {users.length} user{users.length === 1 ? "" : "s"} in Firestore
-          </CardDescription>
-        </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <LoadingState variant="page" />
@@ -208,7 +202,10 @@ export default function UsersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
+                  <TableHead className="w-10">#</TableHead>
+                  <TableHead className="sticky left-0 z-10 bg-zinc-50">
+                    Name
+                  </TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
                   {canManage && (
@@ -217,9 +214,12 @@ export default function UsersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users.map((user) => (
+                {users.map((user, index) => (
                   <TableRow key={user.id}>
-                    <TableCell className="font-medium">
+                    <TableCell className="tabular-nums text-zinc-500">
+                      {index + 1}
+                    </TableCell>
+                    <TableCell className="sticky left-0 z-10 bg-white font-medium">
                       {user.displayName || "—"}
                       {user.id === profile?.id ? (
                         <span className="ml-2 text-xs text-zinc-400">(you)</span>
