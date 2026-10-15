@@ -87,6 +87,8 @@ import type {
   EntityMonthSummary,
   FixedAsset,
   Transaction,
+  TransactionDirection,
+  TransactionStatus,
 } from "@/lib/types";
 import { CATEGORY_LABELS, DEFAULT_PAGE_SIZE } from "@/lib/types";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
@@ -113,7 +115,7 @@ const MONTH_OPTIONS = [
   { value: 12, label: "Dec" },
 ] as const;
 
-function MetricCell({
+function MetricRow({
   label,
   amount,
   tone,
@@ -136,21 +138,19 @@ function MetricCell({
   return (
     <div
       className={cn(
-        "min-w-0 px-2.5 sm:px-3",
+        "flex min-w-0 items-baseline justify-between gap-3 px-2.5 sm:px-3",
         hero ? "py-2.5 sm:py-3" : "py-2",
         className
       )}
     >
-      <div className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
+      <div className="min-w-0 shrink truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </div>
       <div
         title={formatMMK(amount)}
         className={cn(
-          "mt-0.5 font-semibold tracking-tight tabular-nums leading-tight",
-          hero
-            ? "text-base sm:text-xl md:text-2xl"
-            : "truncate text-base",
+          "min-w-0 text-right font-semibold tracking-tight tabular-nums leading-tight",
+          hero ? "text-base sm:text-lg" : "text-sm sm:text-base",
           valueTone
         )}
       >
@@ -217,10 +217,15 @@ export default function BusinessDetailPage() {
   const [period, setPeriod] = useState<PeriodKind>("month");
   const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState(currentMonth);
+  const [filterAccountId, setFilterAccountId] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterDirection, setFilterDirection] = useState("all");
 
+  const [activeTab, setActiveTab] = useState("activity");
   const [assetOpen, setAssetOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<FixedAsset | null>(null);
   const [assetName, setAssetName] = useState("");
+  const [assetDepartment, setAssetDepartment] = useState("");
   const [assetAmount, setAssetAmount] = useState("");
   const [assetDate, setAssetDate] = useState(() =>
     new Date().toISOString().slice(0, 10)
@@ -351,6 +356,7 @@ export default function BusinessDetailPage() {
   function openCreateAsset() {
     setEditingAsset(null);
     setAssetName("");
+    setAssetDepartment("");
     setAssetAmount("");
     setAssetDate(new Date().toISOString().slice(0, 10));
     setAssetNotes("");
@@ -360,6 +366,7 @@ export default function BusinessDetailPage() {
   function openEditAsset(asset: FixedAsset) {
     setEditingAsset(asset);
     setAssetName(asset.name);
+    setAssetDepartment(asset.department || "");
     setAssetAmount(String(asset.amount));
     setAssetDate(asset.date);
     setAssetNotes(asset.notes || "");
@@ -382,6 +389,7 @@ export default function BusinessDetailPage() {
       if (editingAsset) {
         await updateFixedAsset(id, editingAsset.id, {
           name: assetName,
+          department: assetDepartment,
           amount,
           date: assetDate,
           notes: assetNotes,
@@ -390,6 +398,7 @@ export default function BusinessDetailPage() {
       } else {
         await createFixedAsset(id, {
           name: assetName,
+          department: assetDepartment,
           amount,
           date: assetDate,
           notes: assetNotes,
@@ -428,12 +437,29 @@ export default function BusinessDetailPage() {
     }
   }
 
+  const transferOnly = filterDirection === "transfer";
+  const hasHistoryFilters =
+    filterAccountId !== "all" ||
+    filterStatus !== "all" ||
+    filterDirection !== "all";
+
   const loadTransactions = useCallback(
     async (append: boolean, after: PageCursor | null) => {
       setTxLoading(true);
       try {
         const page = await listTransactions({
           businessId: id,
+          accountId:
+            filterAccountId === "all" ? undefined : filterAccountId,
+          status:
+            filterStatus === "all"
+              ? undefined
+              : (filterStatus as TransactionStatus),
+          direction:
+            filterDirection === "all" || transferOnly
+              ? undefined
+              : (filterDirection as TransactionDirection),
+          transferOnly: transferOnly || undefined,
           dateFrom: bounds.start ?? undefined,
           dateTo: bounds.end ?? undefined,
           pageSize: DEFAULT_PAGE_SIZE,
@@ -451,8 +477,22 @@ export default function BusinessDetailPage() {
         setTxLoading(false);
       }
     },
-    [id, bounds.start, bounds.end]
+    [
+      id,
+      bounds.start,
+      bounds.end,
+      filterAccountId,
+      filterStatus,
+      filterDirection,
+      transferOnly,
+    ]
   );
+
+  function clearHistoryFilters() {
+    setFilterAccountId("all");
+    setFilterStatus("all");
+    setFilterDirection("all");
+  }
 
   useEffect(() => {
     if (loading) return;
@@ -674,7 +714,7 @@ export default function BusinessDetailPage() {
         )}
       </div>
 
-      <Tabs defaultValue="activity">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="activity">Activity</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
@@ -782,6 +822,7 @@ export default function BusinessDetailPage() {
                   <TableRow>
                     <TableHead className="w-10">#</TableHead>
                     <TableHead>Name</TableHead>
+                    <TableHead>Department</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Notes</TableHead>
@@ -797,6 +838,9 @@ export default function BusinessDetailPage() {
                         {index + 1}
                       </TableCell>
                       <TableCell className="font-medium">{asset.name}</TableCell>
+                      <TableCell className="text-zinc-600">
+                        {asset.department?.trim() || "—"}
+                      </TableCell>
                       <TableCell>{formatDate(asset.date)}</TableCell>
                       <TableCell className="tabular-nums">
                         {formatMMK(asset.amount)}
@@ -837,44 +881,43 @@ export default function BusinessDetailPage() {
         <TabsContent value="activity">
 
         <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-          <div className="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100">
-            <MetricCell label="Opening" amount={opening} />
-            <MetricCell label="Closing" amount={closing} />
+          <div className="divide-y divide-zinc-100 border-b border-zinc-100">
+            <MetricRow label="Opening" amount={opening} />
+            <MetricRow label="Closing" amount={closing} />
           </div>
-          <div className="grid grid-cols-2 divide-x divide-y divide-zinc-100 border-b border-zinc-100 sm:grid-cols-3 sm:divide-y-0">
-            <MetricCell label="Income" amount={summary.income} tone="income" />
-            <MetricCell
-              label="Expenses"
-              amount={summary.expense}
-              tone="expense"
-            />
-            <MetricCell
+          <div className="divide-y divide-zinc-100 border-b border-zinc-100">
+            <MetricRow
               label="Net"
               amount={summary.net}
               tone={netTone}
               hero
-              className="col-span-2 sm:col-span-1"
+            />
+            <MetricRow label="Income" amount={summary.income} tone="income" />
+            <MetricRow
+              label="Expenses"
+              amount={summary.expense}
+              tone="expense"
             />
           </div>
-          <div className="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100">
-            <MetricCell
+          <div className="divide-y divide-zinc-100 border-b border-zinc-100">
+            <MetricRow
               label="Transfer in"
               amount={summary.transferIn}
               tone="income"
             />
-            <MetricCell
+            <MetricRow
               label="Transfer out"
               amount={summary.transferOut}
               tone="expense"
             />
           </div>
-          <div className="grid grid-cols-2 divide-x divide-zinc-100">
-            <MetricCell
+          <div className="divide-y divide-zinc-100">
+            <MetricRow
               label="Total credit"
               amount={summary.income + summary.transferIn}
               tone="income"
             />
-            <MetricCell
+            <MetricRow
               label="Total debit"
               amount={summary.expense + summary.transferOut}
               tone="expense"
@@ -895,7 +938,75 @@ export default function BusinessDetailPage() {
         />
         </TabsContent>
 
-        <TabsContent value="history">
+        <TabsContent value="history" className="space-y-3">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+          <Select
+            value={filterAccountId}
+            onValueChange={setFilterAccountId}
+          >
+            <SelectTrigger
+              aria-label="Bank or cash"
+              title={
+                filterAccountId === "all"
+                  ? "All accounts"
+                  : accountMap[filterAccountId] || "Account"
+              }
+              className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[11rem] sm:text-sm"
+            >
+              <SelectValue placeholder="Account" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All accounts</SelectItem>
+              {accounts.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {formatAccountLabel(a)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger
+              aria-label="Status"
+              className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[9rem] sm:text-sm"
+            >
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={filterDirection}
+            onValueChange={setFilterDirection}
+          >
+            <SelectTrigger
+              aria-label="Type"
+              className="h-9 min-w-0 w-full px-2.5 text-xs sm:ml-auto sm:w-[11rem] sm:text-sm"
+            >
+              <SelectValue placeholder="Type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All types</SelectItem>
+              <SelectItem value="income">In</SelectItem>
+              <SelectItem value="expense">Out</SelectItem>
+              <SelectItem value="transfer">Internal transfers</SelectItem>
+            </SelectContent>
+          </Select>
+          {hasHistoryFilters && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="col-span-2 h-9 sm:col-span-1"
+              onClick={clearHistoryFilters}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
 
         <Card>
           <CardHeader className="space-y-1 py-3">
@@ -909,7 +1020,9 @@ export default function BusinessDetailPage() {
               <LoadingState variant="inline" />
             ) : transactions.length === 0 ? (
               <p className="px-4 py-6 text-sm text-zinc-500">
-                No transactions for {bounds.label}.
+                {hasHistoryFilters
+                  ? "No transactions match filters."
+                  : `No transactions for ${bounds.label}.`}
               </p>
             ) : (
               <>
@@ -1050,6 +1163,14 @@ export default function BusinessDetailPage() {
                   value={assetName}
                   onChange={(e) => setAssetName(e.target.value)}
                   required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="asset-department">Department</Label>
+                <Input
+                  id="asset-department"
+                  value={assetDepartment}
+                  onChange={(e) => setAssetDepartment(e.target.value)}
                 />
               </div>
               <div className="space-y-2">

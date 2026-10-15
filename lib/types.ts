@@ -1,4 +1,4 @@
-export type UserRole = "maker" | "checker" | "approver";
+export type UserRole = "admin" | "maker" | "checker" | "approver";
 
 export type EntityStatus = "active" | "inactive";
 
@@ -54,6 +54,7 @@ export interface Business {
 export interface FixedAsset {
   id: string;
   name: string;
+  department?: string;
   amount: number;
   date: string;
   notes?: string;

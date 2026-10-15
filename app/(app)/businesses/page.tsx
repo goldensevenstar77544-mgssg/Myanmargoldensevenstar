@@ -33,11 +33,12 @@ import {
 import {
   createBusiness,
   listAccounts,
+  listAllBusinessAccountBalances,
   listBusinesses,
   updateBusiness,
 } from "@/lib/firebase/firestore";
 import { canManageMasterData } from "@/lib/permissions";
-import type { Account, Business } from "@/lib/types";
+import type { Account, Business, BusinessAccountBalance } from "@/lib/types";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
 import { Plus } from "lucide-react";
 import { MobileFab, MobileFabStack } from "@/components/mobile-fab";
@@ -48,6 +49,7 @@ export default function BusinessesPage() {
   const confirm = useConfirm();
   const canManage = canManageMasterData(profile);
   const [items, setItems] = useState<Business[]>([]);
+  const [holdings, setHoldings] = useState<BusinessAccountBalance[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -61,7 +63,12 @@ export default function BusinessesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setItems(await listBusinesses());
+      const [businesses, balances] = await Promise.all([
+        listBusinesses(),
+        listAllBusinessAccountBalances(),
+      ]);
+      setItems(businesses);
+      setHoldings(balances);
     } catch (error) {
       console.error(error);
       toast.error("Failed to load businesses");
@@ -71,6 +78,15 @@ export default function BusinessesPage() {
   }, []);
 
   useLoadOnMount(load);
+
+  const totalsByBusiness = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const holding of holdings) {
+      totals[holding.businessId] =
+        (totals[holding.businessId] ?? 0) + holding.currentBalance;
+    }
+    return totals;
+  }, [holdings]);
 
   const activeAccounts = useMemo(
     () => accounts.filter((a) => a.status === "active"),
@@ -233,6 +249,7 @@ export default function BusinessesPage() {
                   <TableHead>Code</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Notes</TableHead>
+                  <TableHead>Total</TableHead>
                   {canManage && (
                     <TableHead className="text-right">Actions</TableHead>
                   )}
@@ -264,6 +281,9 @@ export default function BusinessesPage() {
                     </TableCell>
                     <TableCell className="max-w-xs truncate text-zinc-500">
                       {business.notes || "—"}
+                    </TableCell>
+                    <TableCell className="font-medium tabular-nums">
+                      {formatMMK(totalsByBusiness[business.id] ?? 0)}
                     </TableCell>
                     {canManage && (
                       <TableCell className="text-right">

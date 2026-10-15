@@ -39,7 +39,7 @@ import type {
 } from "@/lib/types";
 import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "@/lib/types";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
-import { formatAccountLabel } from "@/lib/utils";
+import { formatAccountLabel, formatMMK } from "@/lib/utils";
 import {
   TransactionAttachments,
   revokePendingFiles,
@@ -61,8 +61,8 @@ export default function NewTransactionPage() {
   const [toBusinessId, setToBusinessId] = useState("");
   const [fromAccountId, setFromAccountId] = useState("");
   const [toAccountId, setToAccountId] = useState("");
-  const [direction, setDirection] = useState<TransactionDirection>("income");
-  const [category, setCategory] = useState<string>("sales_revenue");
+  const [direction, setDirection] = useState<TransactionDirection | "">("");
+  const [category, setCategory] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState("");
@@ -83,7 +83,11 @@ export default function NewTransactionPage() {
   useLoadOnMount(loadFormData);
 
   const categories =
-    direction === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+    direction === "income"
+      ? INCOME_CATEGORIES
+      : direction === "expense"
+        ? EXPENSE_CATEGORIES
+        : [];
   const makerLabel = userDisplayName(profile);
 
   if (!canCreateTransaction(profile)) {
@@ -108,6 +112,11 @@ export default function NewTransactionPage() {
       return;
     }
 
+    if (!date) {
+      toast.error("Select a date");
+      return;
+    }
+
     setSaving(true);
     try {
       if (mode === "transfer") {
@@ -118,6 +127,14 @@ export default function NewTransactionPage() {
         }
         if (fromAccountId === toAccountId) {
           toast.error("Choose two different accounts for a transfer");
+          setSaving(false);
+          return;
+        }
+        const fromAccount = accounts.find((a) => a.id === fromAccountId);
+        if (fromAccount && value > fromAccount.currentBalance) {
+          toast.error(
+            `Amount exceeds current balance (${formatMMK(fromAccount.currentBalance)})`
+          );
           setSaving(false);
           return;
         }
@@ -154,6 +171,26 @@ export default function NewTransactionPage() {
         toast.error("Select business and bank / cash account");
         setSaving(false);
         return;
+      }
+      if (!direction) {
+        toast.error("Select type");
+        setSaving(false);
+        return;
+      }
+      if (!category) {
+        toast.error("Select category");
+        setSaving(false);
+        return;
+      }
+      if (direction === "expense") {
+        const account = accounts.find((a) => a.id === accountId);
+        if (account && value > account.currentBalance) {
+          toast.error(
+            `Amount exceeds current balance (${formatMMK(account.currentBalance)})`
+          );
+          setSaving(false);
+          return;
+        }
       }
       const id = await createTransaction({
         businessId,
@@ -267,7 +304,7 @@ export default function NewTransactionPage() {
                     <SelectContent>
                       {accounts.map((a) => (
                         <SelectItem key={a.id} value={a.id}>
-                          {formatAccountLabel(a)}
+                          {`${formatAccountLabel(a)} · ${formatMMK(a.currentBalance)}`}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -278,19 +315,14 @@ export default function NewTransactionPage() {
                   <div className="space-y-2">
                     <Label>Type</Label>
                     <Select
-                      value={direction}
+                      value={direction || undefined}
                       onValueChange={(v) => {
-                        const next = v as TransactionDirection;
-                        setDirection(next);
-                        setCategory(
-                          (next === "income"
-                            ? INCOME_CATEGORIES
-                            : EXPENSE_CATEGORIES)[0].value
-                        );
+                        setDirection(v as TransactionDirection);
+                        setCategory("");
                       }}
                     >
                       <SelectTrigger>
-                        <SelectValue />
+                        <SelectValue placeholder="Select type" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="income">In</SelectItem>
@@ -300,9 +332,13 @@ export default function NewTransactionPage() {
                   </div>
                   <div className="space-y-2">
                     <Label>Category</Label>
-                    <Select value={category} onValueChange={setCategory}>
+                    <Select
+                      value={category || undefined}
+                      onValueChange={setCategory}
+                      disabled={!direction}
+                    >
                       <SelectTrigger>
-                        <SelectValue />
+                        <SelectValue placeholder="Select category" />
                       </SelectTrigger>
                       <SelectContent>
                         {categories.map((c) => (
@@ -368,7 +404,7 @@ export default function NewTransactionPage() {
                       <SelectContent>
                         {accounts.map((a) => (
                           <SelectItem key={a.id} value={a.id}>
-                            {formatAccountLabel(a)}
+                            {`${formatAccountLabel(a)} · ${formatMMK(a.currentBalance)}`}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -386,7 +422,7 @@ export default function NewTransactionPage() {
                       <SelectContent>
                         {accounts.map((a) => (
                           <SelectItem key={a.id} value={a.id}>
-                            {formatAccountLabel(a)}
+                            {`${formatAccountLabel(a)} · ${formatMMK(a.currentBalance)}`}
                           </SelectItem>
                         ))}
                       </SelectContent>

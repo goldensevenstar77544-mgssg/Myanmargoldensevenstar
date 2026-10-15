@@ -14,7 +14,7 @@ type CreateUserBody = {
   role?: UserRole;
 };
 
-async function requireFinanceAdmin(
+async function requireAppAdmin(
   request: Request
 ): Promise<{ uid: string; displayName: string; email: string }> {
   const header = request.headers.get("authorization") || "";
@@ -29,14 +29,11 @@ async function requireFinanceAdmin(
   const decoded = await getAdminAuth().verifyIdToken(match[1]);
   const profile = await getAdminDb().collection("users").doc(decoded.uid).get();
   const role = profile.data()?.role;
-  if (!profile.exists || (role !== "checker" && role !== "approver")) {
-    throw new Response(
-      JSON.stringify({ error: "Checker or Approver access required" }),
-      {
-        status: 403,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+  if (!profile.exists || role !== "admin") {
+    throw new Response(JSON.stringify({ error: "Admin access required" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
   }
   const data = profile.data()!;
   return {
@@ -58,7 +55,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const actor = await requireFinanceAdmin(request);
+    const actor = await requireAppAdmin(request);
 
     const body = (await request.json()) as CreateUserBody;
     const email = body.email?.trim().toLowerCase() || "";
@@ -78,9 +75,17 @@ export async function POST(request: Request) {
     if (!displayName) {
       return NextResponse.json({ error: "Display name is required" }, { status: 400 });
     }
-    if (role !== "maker" && role !== "checker" && role !== "approver") {
+    if (
+      role !== "admin" &&
+      role !== "maker" &&
+      role !== "checker" &&
+      role !== "approver"
+    ) {
       return NextResponse.json(
-        { error: 'Role must be "maker", "checker", or "approver"' },
+        {
+          error:
+            'Role must be "admin", "maker", "checker", or "approver"',
+        },
         { status: 400 }
       );
     }
@@ -101,7 +106,7 @@ export async function POST(request: Request) {
     });
 
     const actorName =
-      actor.displayName || actor.email || "Checker";
+      actor.displayName || actor.email || "Admin";
     await db.collection("auditLogs").add({
       action: "created",
       entityType: "user",

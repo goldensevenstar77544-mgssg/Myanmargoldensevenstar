@@ -10,9 +10,9 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role;
     }
 
-    /** Matches who can create/edit pending transactions (maker + checker + approver). */
+    /** Matches who can create/edit pending transactions (admin + maker). */
     function canManageAttachments() {
-      return signedIn() && userRole() in ['maker', 'checker', 'approver'];
+      return signedIn() && userRole() in ['admin', 'maker'];
     }
 
     match /transactions/{txId}/{fileName} {

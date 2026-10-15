@@ -30,7 +30,7 @@ const VALID_CATEGORIES: PurgeCategory[] = [
 
 const BATCH_LIMIT = 400;
 
-async function requireApprover(
+async function requireAppAdmin(
   request: Request
 ): Promise<{ uid: string; displayName: string; email: string }> {
   const header = request.headers.get("authorization") || "";
@@ -45,14 +45,11 @@ async function requireApprover(
   const decoded = await getAdminAuth().verifyIdToken(match[1]);
   const profile = await getAdminDb().collection("users").doc(decoded.uid).get();
   const role = profile.data()?.role;
-  if (!profile.exists || role !== "approver") {
-    throw new Response(
-      JSON.stringify({ error: "Approver access required" }),
-      {
-        status: 403,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+  if (!profile.exists || role !== "admin") {
+    throw new Response(JSON.stringify({ error: "Admin access required" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
   }
   const data = profile.data()!;
   return {
@@ -203,7 +200,7 @@ export async function POST(request: Request) {
       );
     }
 
-    await requireApprover(request);
+    await requireAppAdmin(request);
 
     const body = (await request.json()) as PurgeBody;
     const raw = Array.isArray(body.categories) ? body.categories : [];

@@ -40,7 +40,7 @@ import {
   listBusinesses,
   type PageCursor,
 } from "@/lib/firebase/firestore";
-import { isApprover, isChecker } from "@/lib/permissions";
+import { canViewAudit } from "@/lib/permissions";
 import type {
   Account,
   AuditAction,
@@ -464,13 +464,14 @@ export default function AuditPage() {
     }
   }
 
-  if (!isChecker(profile) && !isApprover(profile)) {
+  if (!canViewAudit(profile)) {
     return (
       <Card>
         <CardHeader>
           <CardTitle>Staff access required</CardTitle>
           <CardDescription>
-            Only Checkers and Approvers can view the activity audit trail.
+            Only Admins, Checkers, and Approvers can view the activity audit
+            trail.
           </CardDescription>
         </CardHeader>
       </Card>

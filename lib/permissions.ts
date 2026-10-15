@@ -1,5 +1,9 @@
 import type { AppUser, Transaction, UserRole } from "@/lib/types";
 
+export function isAdmin(user: AppUser | null | undefined): boolean {
+  return user?.role === "admin";
+}
+
 export function isChecker(user: AppUser | null | undefined): boolean {
   return user?.role === "checker";
 }
@@ -12,17 +16,17 @@ export function isApprover(user: AppUser | null | undefined): boolean {
   return user?.role === "approver";
 }
 
-/** Checker or Approver — full admin create/edit (same as Checker). */
+/** @deprecated Prefer isAdmin — master-data / user management is admin-only. */
 export function isFinanceAdmin(user: AppUser | null | undefined): boolean {
-  return isChecker(user) || isApprover(user);
+  return isAdmin(user);
 }
 
 export function canManageMasterData(user: AppUser | null | undefined): boolean {
-  return isFinanceAdmin(user);
+  return isAdmin(user);
 }
 
 export function canCreateTransaction(user: AppUser | null | undefined): boolean {
-  return isMaker(user) || isFinanceAdmin(user);
+  return isMaker(user) || isAdmin(user);
 }
 
 export function canEditTransaction(
@@ -31,7 +35,7 @@ export function canEditTransaction(
 ): boolean {
   if (!user) return false;
   if (tx.status !== "pending") return false;
-  if (isFinanceAdmin(user)) return true;
+  if (isAdmin(user)) return true;
   return isMaker(user) && tx.makerId === user.id;
 }
 
@@ -39,8 +43,24 @@ export function canApproveOrReject(
   user: AppUser | null | undefined,
   tx: Pick<Transaction, "makerId" | "status">
 ): boolean {
-  if (!user || !isApprover(user)) return false;
-  return tx.status === "pending";
+  if (!user || tx.status !== "pending") return false;
+  return isApprover(user) || isAdmin(user);
+}
+
+export function canViewApprovals(user: AppUser | null | undefined): boolean {
+  return isAdmin(user) || isChecker(user) || isApprover(user);
+}
+
+export function canViewAudit(user: AppUser | null | undefined): boolean {
+  return isAdmin(user) || isChecker(user) || isApprover(user);
+}
+
+export function canViewUsers(user: AppUser | null | undefined): boolean {
+  return isAdmin(user) || isChecker(user);
+}
+
+function pathMatches(pathname: string, base: string): boolean {
+  return pathname === base || pathname.startsWith(`${base}/`);
 }
 
 export function canAccessAppPath(
@@ -48,22 +68,59 @@ export function canAccessAppPath(
   pathname: string
 ): boolean {
   if (!user) return false;
-  if (pathname === "/settings" || pathname.startsWith("/settings/")) {
-    return isApprover(user);
-  }
-  if (isFinanceAdmin(user)) return true;
-  if (isMaker(user)) {
-    return pathname === "/transactions" || pathname.startsWith("/transactions/");
-  }
+
   // Unassigned users can open the dashboard to see the missing-role message.
-  return pathname === "/";
+  if (!user.role) {
+    return pathname === "/" || pathname === "";
+  }
+
+  if (pathname === "/" || pathname === "") {
+    return isAdmin(user);
+  }
+  if (pathMatches(pathname, "/settings")) {
+    return isAdmin(user);
+  }
+  if (pathMatches(pathname, "/users")) {
+    return canViewUsers(user);
+  }
+  if (pathMatches(pathname, "/approvals")) {
+    return canViewApprovals(user);
+  }
+  if (pathMatches(pathname, "/audit")) {
+    return canViewAudit(user);
+  }
+  if (pathMatches(pathname, "/transactions")) {
+    return (
+      isAdmin(user) ||
+      isMaker(user) ||
+      isChecker(user) ||
+      isApprover(user)
+    );
+  }
+  if (
+    pathMatches(pathname, "/accounts") ||
+    pathMatches(pathname, "/businesses")
+  ) {
+    return (
+      isAdmin(user) ||
+      isMaker(user) ||
+      isChecker(user) ||
+      isApprover(user)
+    );
+  }
+
+  return false;
 }
 
 export function homePathForRole(user: AppUser | null | undefined): string {
-  return isMaker(user) ? "/transactions" : "/";
+  if (isAdmin(user)) return "/";
+  if (isApprover(user)) return "/approvals";
+  if (isMaker(user) || isChecker(user)) return "/transactions";
+  return "/";
 }
 
 export function roleLabel(role: UserRole | null | undefined): string {
+  if (role === "admin") return "Admin";
   if (role === "checker") return "Checker";
   if (role === "maker") return "Maker";
   if (role === "approver") return "Approver";

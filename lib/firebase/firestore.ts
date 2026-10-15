@@ -667,6 +667,15 @@ export async function listBusinessAccountBalances(
   return snap.docs.map((d) => mapBusinessAccountBalance(d.data(), d.id));
 }
 
+export async function listAllBusinessAccountBalances(): Promise<
+  BusinessAccountBalance[]
+> {
+  const snap = await getDocs(
+    collection(getClientDb(), "businessAccountBalances")
+  );
+  return snap.docs.map((d) => mapBusinessAccountBalance(d.data(), d.id));
+}
+
 export async function listAccountBusinessBalances(
   accountId: string
 ): Promise<BusinessAccountBalance[]> {
@@ -861,6 +870,7 @@ function mapFixedAsset(data: DocumentData, id: string): FixedAsset {
   return {
     id,
     name: data.name ?? "",
+    department: data.department,
     amount: Number(data.amount ?? 0),
     date: data.date ?? "",
     notes: data.notes,
@@ -897,12 +907,19 @@ async function recomputeFixedAssetExpense(businessId: string): Promise<number> {
 
 export async function createFixedAsset(
   businessId: string,
-  input: { name: string; amount: number; date: string; notes?: string }
+  input: {
+    name: string;
+    department?: string;
+    amount: number;
+    date: string;
+    notes?: string;
+  }
 ): Promise<string> {
   const amount = Number(input.amount);
   if (!(amount > 0)) throw new Error("Amount must be greater than zero");
   const ref = await addDoc(fixedAssetsCollection(businessId), {
     name: input.name.trim(),
+    department: input.department?.trim() || "",
     amount,
     date: input.date,
     notes: input.notes?.trim() || "",
@@ -916,10 +933,18 @@ export async function createFixedAsset(
 export async function updateFixedAsset(
   businessId: string,
   assetId: string,
-  input: Partial<{ name: string; amount: number; date: string; notes: string }>
+  input: Partial<{
+    name: string;
+    department: string;
+    amount: number;
+    date: string;
+    notes: string;
+  }>
 ): Promise<void> {
   const payload: DocumentData = { updatedAt: serverTimestamp() };
   if (input.name !== undefined) payload.name = input.name.trim();
+  if (input.department !== undefined)
+    payload.department = input.department.trim();
   if (input.amount !== undefined) {
     const amount = Number(input.amount);
     if (!(amount > 0)) throw new Error("Amount must be greater than zero");
@@ -1029,6 +1054,8 @@ export type ListTransactionsFilters = {
   businessId?: string;
   accountId?: string;
   direction?: TransactionDirection;
+  /** Only internal transfer legs (`transfers_sent` / `transfers_received`). */
+  transferOnly?: boolean;
   dateFrom?: string;
   dateTo?: string;
   makerId?: string;
@@ -1063,6 +1090,11 @@ function transactionFilterConstraints(
     constraints.push(where("accountId", "==", filters.accountId));
   if (filters?.direction)
     constraints.push(where("direction", "==", filters.direction));
+  if (filters?.transferOnly) {
+    constraints.push(
+      where("category", "in", ["transfers_sent", "transfers_received"])
+    );
+  }
 
   if (filters?.dateFrom)
     constraints.push(where("date", ">=", filters.dateFrom));
@@ -1200,6 +1232,11 @@ export async function createTransaction(input: {
     const accountSnap = await transaction.get(accountRef);
     if (!accountSnap.exists()) throw new Error("Account not found");
 
+    const currentBalance = Number(accountSnap.data()?.currentBalance ?? 0);
+    if (input.direction === "expense" && amount > currentBalance) {
+      throw new Error("Amount exceeds current account balance");
+    }
+
     const counter = await readCounterSeq(transaction, input.date);
     const groupRef = groupSummaryRef();
     const groupSnap = await transaction.get(groupRef);
@@ -1296,6 +1333,10 @@ export async function createTransfer(input: {
     ]);
     if (!fromSnap.exists() || !toSnap.exists()) {
       throw new Error("Account not found");
+    }
+    const fromBalance = Number(fromSnap.data()?.currentBalance ?? 0);
+    if (amount > fromBalance) {
+      throw new Error("Amount exceeds current account balance");
     }
     const fromAccountLabel = formatAccountLabel(
       mapAccount(fromSnap.data()!, fromSnap.id)
@@ -1718,6 +1759,9 @@ async function approveSingleTransaction(
     const pendingCount = Number(accountSnap.data().pendingCount ?? 0);
     const approvedCount = Number(accountSnap.data().approvedCount ?? 0);
     const delta = data.direction === "income" ? amount : -amount;
+    if (data.direction === "expense" && amount > currentBalance) {
+      throw new Error("Amount exceeds current account balance");
+    }
     const name = approverName.trim();
 
     transaction.update(txRef, {
@@ -1848,6 +1892,9 @@ export async function approveTransferGroup(
       const pendingCount = Number(accountSnap.data()?.pendingCount ?? 0);
       const approvedCount = Number(accountSnap.data()?.approvedCount ?? 0);
       const delta = leg.direction === "income" ? amount : -amount;
+      if (leg.direction === "expense" && amount > currentBalance) {
+        throw new Error("Amount exceeds current account balance");
+      }
 
       transaction.update(legRefs[i]!, {
         status: "approved",

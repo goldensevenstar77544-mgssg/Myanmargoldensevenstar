@@ -52,7 +52,7 @@ import {
 import { emptyBucket, sumBuckets } from "@/lib/summaries";
 import {
   canCreateTransaction,
-  isFinanceAdmin,
+  isAdmin,
 } from "@/lib/permissions";
 import type {
   Account,
@@ -537,7 +537,7 @@ export default function DashboardPage() {
           <DashboardHero
             stats={stats}
             periodLabel={bounds.label}
-            showApprovalsCta={isFinanceAdmin(profile)}
+            showApprovalsCta={isAdmin(profile)}
             showNewTransactionCta={canCreateTransaction(profile)}
           />
 
@@ -660,9 +660,9 @@ export default function DashboardPage() {
               <CardHeader>
                 <CardTitle className="text-amber-900">Role not assigned</CardTitle>
                 <CardDescription className="text-amber-800">
-                  Your user profile exists but has no role. Ask a Checker to set
-                  your role to <code>maker</code>, <code>checker</code>, or{" "}
-                  <code>approver</code>.
+                  Your user profile exists but has no role. Ask an Admin to set
+                  your role to <code>admin</code>, <code>maker</code>,{" "}
+                  <code>checker</code>, or <code>approver</code>.
                 </CardDescription>
               </CardHeader>
             </Card>

@@ -182,7 +182,7 @@ export function BusinessComparisonChart({
                   tick={{ fill: "#71717a", fontSize: 12 }}
                   tickLine={false}
                   axisLine={{ stroke: "#e4e4e7" }}
-                  width={48}
+                  width={88}
                 />
                 <Tooltip
                   formatter={(value) => {

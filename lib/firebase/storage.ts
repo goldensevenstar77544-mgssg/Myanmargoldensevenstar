@@ -10,7 +10,10 @@ import {
   MAX_ATTACHMENT_BYTES,
   type TransactionAttachment,
 } from "@/lib/types";
-import { validateAttachmentInput } from "@/lib/image-compression";
+import {
+  compressAttachmentImage,
+  validateAttachmentInput,
+} from "@/lib/image-compression";
 
 export { validateAttachmentInput };
 
@@ -36,26 +39,27 @@ export async function uploadTransactionImage(params: {
   file: File;
   uploadedBy: string;
 }): Promise<TransactionAttachment> {
-  const error = validateAttachmentFile(params.file);
+  const file = await compressAttachmentImage(params.file);
+  const error = validateAttachmentFile(file);
   if (error) throw new Error(error);
 
   const id =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const path = `transactions/${params.transactionId}/${id}-${safeFileName(params.file.name)}`;
+  const path = `transactions/${params.transactionId}/${id}-${safeFileName(file.name)}`;
   const storageRef = ref(getClientStorage(), path);
-  await uploadBytes(storageRef, params.file, {
-    contentType: params.file.type,
+  await uploadBytes(storageRef, file, {
+    contentType: file.type,
   });
   const url = await getDownloadURL(storageRef);
 
   return {
     path,
     url,
-    name: params.file.name,
-    contentType: params.file.type,
-    size: params.file.size,
+    name: file.name,
+    contentType: file.type,
+    size: file.size,
     uploadedAt: new Date(),
     uploadedBy: params.uploadedBy,
   };

@@ -84,7 +84,7 @@ const MONTH_OPTIONS = [
   { value: 12, label: "Dec" },
 ] as const;
 
-function MetricCell({
+function MetricRow({
   label,
   amount,
   tone,
@@ -107,21 +107,19 @@ function MetricCell({
   return (
     <div
       className={cn(
-        "min-w-0 px-2.5 sm:px-3",
+        "flex min-w-0 items-baseline justify-between gap-3 px-2.5 sm:px-3",
         hero ? "py-2.5 sm:py-3" : "py-2",
         className
       )}
     >
-      <div className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
+      <div className="min-w-0 shrink truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </div>
       <div
         title={formatMMK(amount)}
         className={cn(
-          "mt-0.5 font-semibold tracking-tight tabular-nums leading-tight",
-          hero
-            ? "text-base sm:text-xl md:text-2xl"
-            : "truncate text-base",
+          "min-w-0 text-right font-semibold tracking-tight tabular-nums leading-tight",
+          hero ? "text-base sm:text-lg" : "text-sm sm:text-base",
           valueTone
         )}
       >
@@ -608,35 +606,34 @@ export default function AccountDetailPage() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-        <div className="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100">
-          <MetricCell label="Opening" amount={opening} />
-          <MetricCell
+        <div className="divide-y divide-zinc-100 border-b border-zinc-100">
+          <MetricRow label="Opening" amount={opening} />
+          <MetricRow
             label={period === "all" ? "Current" : "Closing"}
             amount={closing}
           />
         </div>
-        <div className="grid grid-cols-2 divide-x divide-y divide-zinc-100 border-b border-zinc-100 sm:grid-cols-3 sm:divide-y-0">
-          <MetricCell label="Income" amount={summary.income} tone="income" />
-          <MetricCell
-            label="Expenses"
-            amount={summary.expense}
-            tone="expense"
-          />
-          <MetricCell
+        <div className="divide-y divide-zinc-100 border-b border-zinc-100">
+          <MetricRow
             label="Net"
             amount={summary.net}
             tone={netTone}
             hero
-            className="col-span-2 sm:col-span-1"
+          />
+          <MetricRow label="Income" amount={summary.income} tone="income" />
+          <MetricRow
+            label="Expenses"
+            amount={summary.expense}
+            tone="expense"
           />
         </div>
-        <div className="grid grid-cols-2 divide-x divide-zinc-100">
-          <MetricCell
+        <div className="divide-y divide-zinc-100">
+          <MetricRow
             label="Transfer in"
             amount={summary.transferIn}
             tone="income"
           />
-          <MetricCell
+          <MetricRow
             label="Transfer out"
             amount={summary.transferOut}
             tone="expense"

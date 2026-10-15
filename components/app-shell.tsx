@@ -22,32 +22,26 @@ import { useConfirm } from "@/components/confirm-dialog";
 import { RoleBadge } from "@/components/role-badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { isApprover, isChecker } from "@/lib/permissions";
+import { canAccessAppPath } from "@/lib/permissions";
 
 type NavItem = {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  /** Visible to checkers only (master-data / setup). */
-  checkerOnly?: boolean;
-  /** Visible to checkers and approvers (not makers). */
-  staffOnly?: boolean;
-  /** Visible to approvers only. */
-  approverOnly?: boolean;
 };
 
 const primaryNav: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, staffOnly: true },
+  { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/transactions", label: "Transactions", icon: Receipt },
-  { href: "/approvals", label: "Approvals", icon: ShieldCheck, staffOnly: true },
-  { href: "/audit", label: "Audit Logs", icon: ScrollText, staffOnly: true },
+  { href: "/approvals", label: "Approvals", icon: ShieldCheck },
+  { href: "/audit", label: "Audit Logs", icon: ScrollText },
 ];
 
 const setupNav: NavItem[] = [
-  { href: "/businesses", label: "Businesses", icon: Building2, checkerOnly: true },
-  { href: "/accounts", label: "Accounts", icon: Wallet, checkerOnly: true },
-  { href: "/users", label: "Users", icon: Users, checkerOnly: true },
-  { href: "/settings", label: "Settings", icon: Settings, approverOnly: true },
+  { href: "/businesses", label: "Businesses", icon: Building2 },
+  { href: "/accounts", label: "Accounts", icon: Wallet },
+  { href: "/users", label: "Users", icon: Users },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 function initialsFrom(name?: string | null, email?: string | null) {
@@ -157,26 +151,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [isMobileNav, setIsMobileNav] = useState(false);
 
-  const checker = isChecker(profile);
-  const approver = isApprover(profile);
   const drawerOpen = isMobileNav && open;
-
-  function visibleNav(item: NavItem) {
-    if (item.approverOnly) return approver;
-    // Approvers can open every other page; create/edit of master data stays Checker-only in UI.
-    if (approver) return true;
-    if (item.checkerOnly) return checker;
-    if (item.staffOnly) return checker;
-    return true;
-  }
+  const role = profile?.role ?? null;
 
   const primaryItems = useMemo(
-    () => primaryNav.filter(visibleNav),
-    [checker, approver]
+    () => primaryNav.filter((item) => canAccessAppPath(profile, item.href)),
+    [profile, role]
   );
   const setupItems = useMemo(
-    () => setupNav.filter(visibleNav),
-    [checker, approver]
+    () => setupNav.filter((item) => canAccessAppPath(profile, item.href)),
+    [profile, role]
   );
 
   const displayName = profile?.displayName || profile?.email || "Account";

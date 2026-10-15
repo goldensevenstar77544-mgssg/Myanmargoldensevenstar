@@ -14,7 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { invalidateMasterDataCache } from "@/lib/firebase/master-data-cache";
-import { isApprover } from "@/lib/permissions";
+import { isAdmin } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
 type PurgeCategory =
@@ -76,13 +76,13 @@ export default function SettingsPage() {
 
   const selectedList = useMemo(() => [...selected], [selected]);
 
-  if (!isApprover(profile)) {
+  if (!isAdmin(profile)) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Approver access required</CardTitle>
+          <CardTitle>Admin access required</CardTitle>
           <CardDescription>
-            Only Approvers can open Settings and purge test data.
+            Only Admins can open Settings and purge test data.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -178,7 +178,7 @@ export default function SettingsPage() {
           </h1>
         </div>
         <p className="mt-1 text-sm text-zinc-600">
-          Approver tools for environment cleanup. User accounts are never
+          Admin tools for environment cleanup. User accounts are never
           deleted.
         </p>
       </div>

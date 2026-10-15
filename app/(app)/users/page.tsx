@@ -43,12 +43,19 @@ import {
 import { listUsers, updateUserProfile } from "@/lib/firebase/firestore";
 import {
   canManageMasterData,
-  isFinanceAdmin,
+  canViewUsers,
   roleLabel,
   userDisplayName,
 } from "@/lib/permissions";
 import type { AppUser, UserRole } from "@/lib/types";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
+
+const ASSIGNABLE_ROLES: UserRole[] = [
+  "admin",
+  "maker",
+  "checker",
+  "approver",
+];
 
 export default function UsersPage() {
   const { profile, firebaseUser } = useAuth();
@@ -78,13 +85,13 @@ export default function UsersPage() {
 
   const canManage = canManageMasterData(profile);
 
-  if (!isFinanceAdmin(profile)) {
+  if (!canViewUsers(profile)) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Staff access required</CardTitle>
+          <CardTitle>Access required</CardTitle>
           <CardDescription>
-            Only Checkers and Approvers can manage user accounts.
+            Only Admins and Checkers can view user accounts.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -138,8 +145,8 @@ export default function UsersPage() {
   async function onRoleChange(user: AppUser, nextRole: UserRole) {
     if (!profile) return;
     if (user.role === nextRole) return;
-    if (user.id === profile.id && nextRole !== "checker") {
-      toast.error("You cannot remove your own Checker role");
+    if (user.id === profile.id && nextRole !== "admin") {
+      toast.error("You cannot remove your own Admin role");
       return;
     }
     const ok = await confirm({
@@ -172,11 +179,13 @@ export default function UsersPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
           <p className="text-sm text-zinc-500">
-            Create Maker, Checker, and Approver accounts
+            {canManage
+              ? "Create Admin, Maker, Checker, and Approver accounts"
+              : "View user accounts"}
             {users.length > 0
               ? ` · ${users.length} user${users.length === 1 ? "" : "s"}`
               : ""}
-            . Share the initial password securely.
+            {canManage ? ". Share the initial password securely." : "."}
           </p>
         </div>
         {canManage && (
@@ -236,11 +245,9 @@ export default function UsersPage() {
                           value={user.role ?? "unassigned"}
                           onValueChange={(v) => {
                             if (
-                              v === "maker" ||
-                              v === "checker" ||
-                              v === "approver"
+                              (ASSIGNABLE_ROLES as string[]).includes(v)
                             ) {
-                              void onRoleChange(user, v);
+                              void onRoleChange(user, v as UserRole);
                             }
                           }}
                         >
@@ -253,6 +260,7 @@ export default function UsersPage() {
                                 Unassigned
                               </SelectItem>
                             )}
+                            <SelectItem value="admin">Admin</SelectItem>
                             <SelectItem value="maker">Maker</SelectItem>
                             <SelectItem value="checker">Checker</SelectItem>
                             <SelectItem value="approver">Approver</SelectItem>
@@ -322,6 +330,7 @@ export default function UsersPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="admin">Admin</SelectItem>
                     <SelectItem value="maker">Maker</SelectItem>
                     <SelectItem value="checker">Checker</SelectItem>
                     <SelectItem value="approver">Approver</SelectItem>

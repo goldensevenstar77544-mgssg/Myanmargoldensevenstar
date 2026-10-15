@@ -180,7 +180,7 @@ function PeriodSegment({
   );
 }
 
-function KpiCell({
+function KpiRow({
   label,
   amount,
   tone,
@@ -205,21 +205,19 @@ function KpiCell({
   return (
     <div
       className={cn(
-        "min-w-0 px-2.5 sm:px-3",
+        "flex min-w-0 items-baseline justify-between gap-3 px-2.5 sm:px-3",
         hero ? "py-2.5 sm:py-3" : "py-2",
         className
       )}
     >
-      <div className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
+      <div className="min-w-0 shrink truncate text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </div>
       <div
         title={isCount ? String(amount) : formatMMK(amount)}
         className={cn(
-          "mt-0.5 font-semibold tracking-tight tabular-nums leading-tight",
-          hero
-            ? "text-base sm:text-xl md:text-2xl"
-            : "truncate text-base",
+          "min-w-0 text-right font-semibold tracking-tight tabular-nums leading-tight",
+          hero ? "text-base sm:text-lg" : "text-sm sm:text-base",
           valueTone
         )}
       >
@@ -280,15 +278,17 @@ export default function TransactionsPage() {
   const listFiltersFromApplied = useCallback(
     (filters: AppliedFilters) => {
       if (!profile) return null;
+      const transferOnly = filters.direction === "transfer";
       return {
         status:
           filters.status === "all"
             ? undefined
             : (filters.status as TransactionStatus),
         direction:
-          filters.direction === "all"
+          filters.direction === "all" || transferOnly
             ? undefined
             : (filters.direction as TransactionDirection),
+        transferOnly: transferOnly || undefined,
         businessId:
           filters.businessId === "all" ? undefined : filters.businessId,
         accountId: filters.accountId === "all" ? undefined : filters.accountId,
@@ -491,17 +491,16 @@ export default function TransactionsPage() {
           summaryLoading && "opacity-70"
         )}
       >
-        <div className="grid grid-cols-2 divide-x divide-y divide-zinc-100 sm:grid-cols-4 sm:divide-y-0">
-          <KpiCell label="Count" amount={summary.count} isCount />
-          <KpiCell label="Total in" amount={summary.totalIn} tone="income" />
-          <KpiCell label="Total out" amount={summary.totalOut} tone="expense" />
-          <KpiCell
+        <div className="divide-y divide-zinc-100">
+          <KpiRow
             label="Net"
             amount={summary.net}
             tone={netTone}
             hero
-            className="col-span-2 sm:col-span-1"
           />
+          <KpiRow label="Total in" amount={summary.totalIn} tone="income" />
+          <KpiRow label="Total out" amount={summary.totalOut} tone="expense" />
+          <KpiRow label="Count" amount={summary.count} isCount />
         </div>
       </div>
 
@@ -669,22 +668,6 @@ export default function TransactionsPage() {
           </SelectContent>
         </Select>
         <Select
-          value={direction}
-          onValueChange={(v) => setFilterField("direction", v)}
-        >
-          <SelectTrigger
-            aria-label="Type"
-            className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[7.5rem] sm:text-sm"
-          >
-            <SelectValue placeholder="Type" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All types</SelectItem>
-            <SelectItem value="income">In</SelectItem>
-            <SelectItem value="expense">Out</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select
           value={status}
           onValueChange={(v) => setFilterField("status", v)}
         >
@@ -699,6 +682,23 @@ export default function TransactionsPage() {
             <SelectItem value="pending">Pending</SelectItem>
             <SelectItem value="approved">Approved</SelectItem>
             <SelectItem value="rejected">Rejected</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={direction}
+          onValueChange={(v) => setFilterField("direction", v)}
+        >
+          <SelectTrigger
+            aria-label="Type"
+            className="h-9 min-w-0 w-full px-2.5 text-xs sm:ml-auto sm:w-[11rem] sm:text-sm"
+          >
+            <SelectValue placeholder="Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All types</SelectItem>
+            <SelectItem value="income">In</SelectItem>
+            <SelectItem value="expense">Out</SelectItem>
+            <SelectItem value="transfer">Internal transfers</SelectItem>
           </SelectContent>
         </Select>
         {hasActiveFilters && (

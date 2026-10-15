@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { AccountsHero } from "@/components/accounts-hero";
 import { useAuth } from "@/components/auth-provider";
 import { useConfirm } from "@/components/confirm-dialog";
 import { LoadingState } from "@/components/loading-state";
@@ -74,6 +75,21 @@ export default function AccountsPage() {
   }, []);
 
   useLoadOnMount(load);
+
+  const liquidity = useMemo(() => {
+    const activeBank = accounts.filter(
+      (a) => a.type === "bank" && a.status === "active"
+    );
+    const activeCash = accounts.filter(
+      (a) => a.type === "cash" && a.status === "active"
+    );
+    return {
+      bankBalance: activeBank.reduce((sum, a) => sum + a.currentBalance, 0),
+      cashBalance: activeCash.reduce((sum, a) => sum + a.currentBalance, 0),
+      bankCount: activeBank.length,
+      cashCount: activeCash.length,
+    };
+  }, [accounts]);
 
   function openCreate() {
     setEditing(null);
@@ -194,6 +210,16 @@ export default function AccountsPage() {
           <MobileFab label="New account" onClick={openCreate} />
         </MobileFabStack>
       )}
+
+      {!loading && (
+        <AccountsHero
+          bankBalance={liquidity.bankBalance}
+          cashBalance={liquidity.cashBalance}
+          bankCount={liquidity.bankCount}
+          cashCount={liquidity.cashCount}
+        />
+      )}
+
       <Card>
         <CardContent className="p-0">
           {loading ? (

@@ -46,7 +46,6 @@ type Metric = {
   icon: LucideIcon;
   emphasize?: boolean;
   hero?: boolean;
-  fullWidthXs?: boolean;
   tone?: "profit" | "loss" | "income" | "expense" | "neutral";
 };
 
@@ -67,7 +66,6 @@ function moneyMetric(
   options?: {
     tone?: Metric["tone"];
     hero?: boolean;
-    fullWidthXs?: boolean;
   }
 ): Metric {
   return {
@@ -78,11 +76,10 @@ function moneyMetric(
     icon,
     tone: options?.tone,
     hero: options?.hero,
-    fullWidthXs: options?.fullWidthXs,
   };
 }
 
-function MetricCell({ metric }: { metric: Metric }) {
+function MetricRow({ metric }: { metric: Metric }) {
   const Icon = metric.icon;
   const valueTone =
     metric.tone === "profit" || metric.tone === "income"
@@ -102,22 +99,19 @@ function MetricCell({ metric }: { metric: Metric }) {
   return (
     <div
       className={cn(
-        "min-w-0 px-2.5 sm:px-3",
-        metric.hero ? "py-2.5 sm:py-3" : "py-2",
-        metric.fullWidthXs && "col-span-2 sm:col-span-1"
+        "flex min-w-0 items-baseline justify-between gap-3 px-2.5 sm:px-3",
+        metric.hero ? "py-2.5 sm:py-3" : "py-2"
       )}
     >
-      <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+      <div className="flex min-w-0 shrink items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
         <Icon className={cn("h-3.5 w-3.5 shrink-0", iconTone)} aria-hidden />
         <span className="truncate">{metric.label}</span>
       </div>
       <div
         title={metric.title}
         className={cn(
-          "mt-0.5 font-semibold tracking-tight tabular-nums leading-tight",
-          metric.hero
-            ? "text-base sm:text-xl md:text-2xl"
-            : "truncate text-base",
+          "min-w-0 text-right font-semibold tracking-tight tabular-nums leading-tight",
+          metric.hero ? "text-base sm:text-lg" : "text-sm sm:text-base",
           valueTone
         )}
       >
@@ -127,16 +121,39 @@ function MetricCell({ metric }: { metric: Metric }) {
   );
 }
 
-function MetricsGrid({ metrics }: { metrics: Metric[] }) {
-  const cols =
-    metrics.length <= 2
-      ? "grid grid-cols-2"
-      : "grid grid-cols-2 sm:grid-cols-3";
+function MetricsStack({ metrics }: { metrics: Metric[] }) {
   return (
-    <div className={cols}>
+    <div className="divide-y divide-zinc-100">
       {metrics.map((metric) => (
-        <MetricCell key={metric.key} metric={metric} />
+        <MetricRow key={metric.key} metric={metric} />
       ))}
+    </div>
+  );
+}
+
+function OpsGrid({ metrics }: { metrics: Metric[] }) {
+  return (
+    <div className="grid grid-cols-3">
+      {metrics.map((metric) => {
+        const Icon = metric.icon;
+        return (
+          <div key={metric.key} className="min-w-0 px-2.5 py-2 sm:px-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+              <span className="truncate">{metric.label}</span>
+            </div>
+            <div
+              title={metric.title}
+              className={cn(
+                "mt-0.5 text-sm font-semibold tracking-tight tabular-nums text-zinc-950",
+                metric.emphasize && "text-amber-700"
+              )}
+            >
+              {metric.value}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -152,46 +169,13 @@ export function DashboardHero({
 
   const metricGroups: MetricGroup[] = [
     {
-      title: "Performance",
-      caption: "Income and expenses exclude transfers",
-      metrics: [
-        moneyMetric("income", "Income", stats.income, TrendingUp, {
-          tone: "income",
-        }),
-        moneyMetric("expenses", "Expenses", stats.expenses, TrendingDown, {
-          tone: "expense",
-        }),
-        moneyMetric("net", "Net", stats.net, CircleDollarSign, {
-          tone: netTone,
-          hero: true,
-          fullWidthXs: true,
-        }),
-      ],
-    },
-    {
-      title: "Internal transfers",
-      metrics: [
-        moneyMetric("transferIn", "Transfer in", stats.transferIn, ArrowDownLeft, {
-          tone: "income",
-        }),
-        moneyMetric(
-          "transferOut",
-          "Transfer out",
-          stats.transferOut,
-          ArrowUpRight,
-          { tone: "expense" }
-        ),
-      ],
-    },
-    {
       title: "Liquidity",
       metrics: [
-        moneyMetric("bank", "Bank", stats.bankBalance, Landmark),
-        moneyMetric("cash", "Cash", stats.cashBalance, Wallet),
         moneyMetric("available", "Available", stats.available, CircleDollarSign, {
           hero: true,
-          fullWidthXs: true,
         }),
+        moneyMetric("bank", "Bank", stats.bankBalance, Landmark),
+        moneyMetric("cash", "Cash", stats.cashBalance, Wallet),
       ],
       secondaryCaption: "Ops",
       secondaryMetrics: [
@@ -215,6 +199,37 @@ export function DashboardHero({
           icon: Clock3,
           emphasize: stats.pending > 0,
         },
+      ],
+    },
+    {
+      title: "Performance",
+      caption: "Income and expenses exclude transfers",
+      metrics: [
+        moneyMetric("net", "Net", stats.net, CircleDollarSign, {
+          tone: netTone,
+          hero: true,
+        }),
+        moneyMetric("income", "Income", stats.income, TrendingUp, {
+          tone: "income",
+        }),
+        moneyMetric("expenses", "Expenses", stats.expenses, TrendingDown, {
+          tone: "expense",
+        }),
+      ],
+    },
+    {
+      title: "Internal transfers",
+      metrics: [
+        moneyMetric("transferIn", "Transfer in", stats.transferIn, ArrowDownLeft, {
+          tone: "income",
+        }),
+        moneyMetric(
+          "transferOut",
+          "Transfer out",
+          stats.transferOut,
+          ArrowUpRight,
+          { tone: "expense" }
+        ),
       ],
     },
   ];
@@ -281,7 +296,7 @@ export function DashboardHero({
                 <p className="mt-0.5 text-xs text-zinc-400">{group.caption}</p>
               )}
             </div>
-            <MetricsGrid metrics={group.metrics} />
+            <MetricsStack metrics={group.metrics} />
             {group.secondaryMetrics && group.secondaryMetrics.length > 0 && (
               <div className="border-t border-zinc-100">
                 {group.secondaryCaption && (
@@ -289,7 +304,7 @@ export function DashboardHero({
                     {group.secondaryCaption}
                   </div>
                 )}
-                <MetricsGrid metrics={group.secondaryMetrics} />
+                <OpsGrid metrics={group.secondaryMetrics} />
               </div>
             )}
           </div>

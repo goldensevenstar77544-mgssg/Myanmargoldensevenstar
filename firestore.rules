@@ -14,6 +14,10 @@ service cloud.firestore {
       return signedIn() && userDoc().role == role;
     }
 
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
     function isChecker() {
       return hasRole('checker');
     }
@@ -26,12 +30,25 @@ service cloud.firestore {
       return hasRole('approver');
     }
 
-    function isFinanceStaff() {
-      return isChecker() || isApprover();
+    /** View all transactions / audit / approvals queue. */
+    function canViewFinance() {
+      return isAdmin() || isChecker() || isApprover();
+    }
+
+    /** Approve/reject and apply balance rollups. */
+    function canSettle() {
+      return isAdmin() || isApprover();
+    }
+
+    function accountSettleKeysOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['currentBalance', 'pendingCount', 'approvedCount', 'updatedAt']);
     }
 
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || isChecker() || isApprover());
+      allow read: if signedIn() && (
+        request.auth.uid == userId || isAdmin() || isChecker()
+      );
       allow create: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.email is string
@@ -39,7 +56,7 @@ service cloud.firestore {
         && request.resource.data.role == null;
       allow update: if signedIn() && (
         (
-          isFinanceStaff()
+          isAdmin()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'displayName'])
         )
         || (
@@ -52,7 +69,7 @@ service cloud.firestore {
 
     match /businesses/{businessId} {
       allow read: if signedIn();
-      allow create, update: if isFinanceStaff()
+      allow create, update: if isAdmin()
         && request.resource.data.name is string
         && request.resource.data.code is string
         && request.resource.data.status in ['active', 'inactive'];
@@ -60,25 +77,29 @@ service cloud.firestore {
 
       match /fixedAssets/{assetId} {
         allow read: if signedIn();
-        allow create, update: if isFinanceStaff()
+        allow create, update: if isAdmin()
           && request.resource.data.name is string
           && request.resource.data.amount is number
           && request.resource.data.amount > 0
           && request.resource.data.date is string;
-        allow delete: if isFinanceStaff();
+        allow delete: if isAdmin();
       }
     }
 
     match /accounts/{accountId} {
       allow read: if signedIn();
-      allow create: if isFinanceStaff()
+      allow create: if isAdmin()
         && request.resource.data.type in ['bank', 'cash']
         && request.resource.data.currency == 'MMK'
         && request.resource.data.openingBalance is number
         && request.resource.data.currentBalance == request.resource.data.openingBalance
         && request.resource.data.status in ['active', 'inactive'];
       allow update: if signedIn() && (
-        isFinanceStaff()
+        isAdmin()
+        || (
+          canSettle()
+          && accountSettleKeysOnly()
+        )
         || (
           isMaker()
           && request.resource.data.diff(resource.data).affectedKeys()
@@ -90,7 +111,10 @@ service cloud.firestore {
 
     match /businessAccountBalances/{balanceId} {
       allow read: if signedIn();
-      allow create, update: if isFinanceStaff()
+      // Admin sets openings; Approver/Admin may create on first approve settle.
+      allow create, update: if signedIn() && (
+        isAdmin() || canSettle()
+      )
         && request.resource.data.businessId is string
         && request.resource.data.accountId is string
         && request.resource.data.openingBalance is number
@@ -99,16 +123,16 @@ service cloud.firestore {
     }
 
     match /counters/{counterId} {
-      allow read, create, update: if signedIn() && (isMaker() || isFinanceStaff());
+      allow read, create, update: if signedIn() && (isMaker() || isAdmin());
       allow delete: if false;
     }
 
     match /transactions/{txId} {
-      allow read: if isFinanceStaff()
+      allow read: if canViewFinance()
         || (signedIn() && resource.data.makerId == request.auth.uid);
 
       allow create: if signedIn()
-        && (isMaker() || isFinanceStaff())
+        && (isMaker() || isAdmin())
         && request.resource.data.makerId == request.auth.uid
         && request.resource.data.status == 'pending'
         && request.resource.data.amount is number
@@ -120,6 +144,7 @@ service cloud.firestore {
         // Maker/owner edits pending fields (not status to approved)
         (
           resource.data.makerId == request.auth.uid
+          && (isMaker() || isAdmin())
           && resource.data.status == 'pending'
           && request.resource.data.status == 'pending'
           && request.resource.data.makerId == resource.data.makerId
@@ -127,18 +152,18 @@ service cloud.firestore {
           && request.resource.data.amount is number
           && request.resource.data.amount > 0
         )
-        // Approver reject
+        // Approver/Admin reject
         || (
-          isApprover()
+          canSettle()
           && resource.data.status == 'pending'
           && request.resource.data.status == 'rejected'
           && request.resource.data.approverId == request.auth.uid
           && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['status', 'approverId', 'approverName', 'rejectionReason', 'rejectedAt', 'updatedAt'])
         )
-        // Approver approve (balance update in same client txn)
+        // Approver/Admin approve (balance update in same client txn)
         || (
-          isApprover()
+          canSettle()
           && resource.data.status == 'pending'
           && request.resource.data.status == 'approved'
           && request.resource.data.approverId == request.auth.uid
@@ -149,9 +174,9 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['status', 'approverId', 'approverName', 'approvedAt', 'updatedAt'])
         )
-        // Checker or Approver can edit pending
+        // Admin can edit any pending transaction fields
         || (
-          isFinanceStaff()
+          isAdmin()
           && resource.data.status == 'pending'
           && request.resource.data.status == 'pending'
           && request.resource.data.makerId == resource.data.makerId
@@ -163,7 +188,7 @@ service cloud.firestore {
     }
 
     match /auditLogs/{id} {
-      allow read: if isFinanceStaff();
+      allow read: if canViewFinance();
       allow create: if signedIn()
         && request.resource.data.actorId == request.auth.uid
         && request.resource.data.entityType in ['transaction', 'user']
@@ -173,9 +198,10 @@ service cloud.firestore {
 
     match /summaries/group {
       allow read: if signedIn();
-      allow create: if signedIn();
+      allow create: if signedIn() && (isAdmin() || isMaker() || canSettle());
       allow update: if signedIn() && (
-        isFinanceStaff()
+        isAdmin()
+        || canSettle()
         || request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['pendingCount', 'updatedAt'])
       );
@@ -183,30 +209,30 @@ service cloud.firestore {
 
     match /summaries/group/months/{monthId} {
       allow read: if signedIn();
-      allow create, update: if isFinanceStaff();
+      allow create, update: if isAdmin() || canSettle();
       allow delete: if false;
     }
 
     match /businessSummaries/{businessId} {
       allow read: if signedIn();
-      allow create, update: if isFinanceStaff();
+      allow create, update: if isAdmin() || canSettle();
       allow delete: if false;
 
       match /months/{monthId} {
         allow read: if signedIn();
-        allow create, update: if isFinanceStaff();
+        allow create, update: if isAdmin() || canSettle();
         allow delete: if false;
       }
     }
 
     match /accountSummaries/{accountId} {
       allow read: if signedIn();
-      allow create, update: if isFinanceStaff();
+      allow create, update: if isAdmin() || canSettle();
       allow delete: if false;
 
       match /months/{monthId} {
         allow read: if signedIn();
-        allow create, update: if isFinanceStaff();
+        allow create, update: if isAdmin() || canSettle();
         allow delete: if false;
       }
     }
