@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import { Plus } from "lucide-react";
+import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { useConfirm } from "@/components/confirm-dialog";
 import { LoadingState } from "@/components/loading-state";
@@ -57,6 +57,34 @@ const ASSIGNABLE_ROLES: UserRole[] = [
   "approver",
 ];
 
+async function parseApiJson(
+  res: Response,
+  fallback: string
+): Promise<{ error?: string }> {
+  const raw = await res.text();
+  if (!raw) {
+    if (!res.ok) {
+      throw new Error(`${fallback} (HTTP ${res.status}). Empty response.`);
+    }
+    return {};
+  }
+  try {
+    return JSON.parse(raw) as { error?: string };
+  } catch {
+    throw new Error(
+      `${fallback} (HTTP ${res.status}). Server returned non-JSON.`
+    );
+  }
+}
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  if (/did not match the expected pattern/i.test(message)) {
+    return `${fallback}. Check FIREBASE_ADMIN_* env on the host.`;
+  }
+  return message;
+}
+
 export default function UsersPage() {
   const { profile, firebaseUser } = useAuth();
   const confirm = useConfirm();
@@ -68,6 +96,11 @@ export default function UsersPage() {
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<UserRole>("maker");
   const [saving, setSaving] = useState(false);
+
+  const [resetUser, setResetUser] = useState<AppUser | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,6 +139,11 @@ export default function UsersPage() {
     setOpen(true);
   }
 
+  function openReset(user: AppUser) {
+    setResetUser(user);
+    setResetPassword("");
+  }
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!firebaseUser) return;
@@ -141,23 +179,7 @@ export default function UsersPage() {
           role,
         }),
       });
-      // Avoid response.json() — empty/HTML bodies make WebKit throw
-      // "The string did not match the expected pattern."
-      const raw = await res.text();
-      let data: { error?: string } = {};
-      if (raw) {
-        try {
-          data = JSON.parse(raw) as { error?: string };
-        } catch {
-          throw new Error(
-            `Create user failed (HTTP ${res.status}). Server returned non-JSON — check FIREBASE_ADMIN_* on the host.`
-          );
-        }
-      } else if (!res.ok) {
-        throw new Error(
-          `Create user failed (HTTP ${res.status}). Empty response — check FIREBASE_ADMIN_* on the host.`
-        );
-      }
+      const data = await parseApiJson(res, "Create user failed");
       if (!res.ok) {
         throw new Error(data.error || `Failed to create user (HTTP ${res.status})`);
       }
@@ -166,16 +188,87 @@ export default function UsersPage() {
       await load();
     } catch (error) {
       console.error(error);
-      const message =
-        error instanceof Error ? error.message : "Failed to create user";
-      // Never surface the cryptic WebKit JSON/parse message as-is.
-      toast.error(
-        /did not match the expected pattern/i.test(message)
-          ? "Create user failed. Check FIREBASE_ADMIN_* env on the host (see .env.local.example)."
-          : message
-      );
+      toast.error(apiErrorMessage(error, "Failed to create user"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function onResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!firebaseUser || !resetUser) return;
+    if (resetPassword.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+
+    setResetting(true);
+    try {
+      const token = await firebaseUser.getIdToken();
+      const res = await fetch(`/api/users/${resetUser.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          action: "resetPassword",
+          password: resetPassword,
+        }),
+      });
+      const data = await parseApiJson(res, "Reset password failed");
+      if (!res.ok) {
+        throw new Error(
+          data.error || `Failed to reset password (HTTP ${res.status})`
+        );
+      }
+      toast.success(
+        "Password reset. Share it securely — they must change it on next login."
+      );
+      setResetUser(null);
+      setResetPassword("");
+    } catch (error) {
+      console.error(error);
+      toast.error(apiErrorMessage(error, "Failed to reset password"));
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  async function onDelete(user: AppUser) {
+    if (!firebaseUser || !profile) return;
+    if (user.id === profile.id) {
+      toast.error("You cannot delete your own account");
+      return;
+    }
+    const ok = await confirm({
+      title: "Delete user?",
+      description: `Delete ${user.displayName || user.email}? This removes their login and cannot be undone.`,
+      confirmLabel: "Delete user",
+      variant: "destructive",
+    });
+    if (!ok) return;
+
+    setDeletingId(user.id);
+    try {
+      const token = await firebaseUser.getIdToken();
+      const res = await fetch(`/api/users/${user.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await parseApiJson(res, "Delete user failed");
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to delete user (HTTP ${res.status})`);
+      }
+      toast.success("User deleted");
+      await load();
+    } catch (error) {
+      console.error(error);
+      toast.error(apiErrorMessage(error, "Failed to delete user"));
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -257,6 +350,9 @@ export default function UsersPage() {
                   {canManage && (
                     <TableHead className="w-[180px]">Change role</TableHead>
                   )}
+                  {canManage && (
+                    <TableHead className="w-[160px]">Actions</TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -303,6 +399,34 @@ export default function UsersPage() {
                             <SelectItem value="approver">Approver</SelectItem>
                           </SelectContent>
                         </Select>
+                      </TableCell>
+                    )}
+                    {canManage && (
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openReset(user)}
+                            disabled={resetting || deletingId === user.id}
+                          >
+                            <KeyRound className="h-3.5 w-3.5" />
+                            Reset
+                          </Button>
+                          {user.id !== profile?.id ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void onDelete(user)}
+                              disabled={deletingId === user.id || resetting}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              {deletingId === user.id ? "…" : "Delete"}
+                            </Button>
+                          ) : null}
+                        </div>
                       </TableCell>
                     )}
                   </TableRow>
@@ -392,6 +516,65 @@ export default function UsersPage() {
           </form>
         </DialogContent>
       </Dialog>
+      )}
+
+      {canManage && (
+        <Dialog
+          open={Boolean(resetUser)}
+          onOpenChange={(next) => {
+            if (!next) {
+              setResetUser(null);
+              setResetPassword("");
+            }
+          }}
+        >
+          <DialogContent>
+            <form onSubmit={onResetPassword} noValidate>
+              <DialogHeader>
+                <DialogTitle>Reset password</DialogTitle>
+              </DialogHeader>
+              <div className="mt-4 space-y-4">
+                <p className="text-sm text-zinc-500">
+                  Set a temporary password for{" "}
+                  <span className="font-medium text-zinc-800">
+                    {resetUser?.displayName || resetUser?.email}
+                  </span>
+                  . They must change it on next login.
+                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="resetPassword">New password</Label>
+                  <Input
+                    id="resetPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    value={resetPassword}
+                    onChange={(e) => setResetPassword(e.target.value)}
+                    minLength={8}
+                    required
+                  />
+                  <p className="text-xs text-zinc-500">
+                    At least 8 characters. Share this password securely.
+                  </p>
+                </div>
+              </div>
+              <DialogFooter className="mt-6">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setResetUser(null);
+                    setResetPassword("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={resetting}>
+                  {resetting ? "Resetting…" : "Reset password"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

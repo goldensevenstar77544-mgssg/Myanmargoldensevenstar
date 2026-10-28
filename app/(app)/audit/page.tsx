@@ -63,6 +63,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   updated: "Updated",
   approved: "Approved",
   rejected: "Rejected",
+  deleted: "Deleted",
 };
 
 const ACTION_BADGE: Record<
@@ -73,6 +74,7 @@ const ACTION_BADGE: Record<
   updated: "default",
   approved: "success",
   rejected: "danger",
+  deleted: "danger",
 };
 
 function formatChangeSummary(changes?: AuditChange[]): string {
@@ -240,6 +242,9 @@ function summaryFor(log: AuditLog): string {
       return log.description?.trim() || "User created";
     }
     return log.description?.trim() || "Submitted for review";
+  }
+  if (log.action === "deleted") {
+    return log.description?.trim() || "User deleted";
   }
   return log.description?.trim() || "—";
 }
@@ -558,6 +563,7 @@ export default function AuditPage() {
                 <SelectItem value="updated">Updated</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
+                <SelectItem value="deleted">Deleted</SelectItem>
               </SelectContent>
             </Select>
           </div>

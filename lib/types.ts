@@ -131,7 +131,12 @@ export interface Transaction {
   rejectedAt?: Date;
 }
 
-export type AuditAction = "created" | "updated" | "approved" | "rejected";
+export type AuditAction =
+  | "created"
+  | "updated"
+  | "approved"
+  | "rejected"
+  | "deleted";
 
 export type AuditEntityType = "transaction" | "user";
 

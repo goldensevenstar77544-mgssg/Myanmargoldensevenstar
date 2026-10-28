@@ -5,6 +5,12 @@ import {
   getAdminDb,
   isAdminConfigured,
 } from "@/lib/firebase/admin";
+import {
+  ensureAdminConfigured,
+  firebaseErrorCode,
+  looksLikeAdminCredentialIssue,
+  requireAppAdmin,
+} from "@/lib/api/require-app-admin";
 import type { UserRole } from "@/lib/types";
 
 type CreateUserBody = {
@@ -14,39 +20,11 @@ type CreateUserBody = {
   role?: UserRole;
 };
 
-async function requireAppAdmin(
-  request: Request
-): Promise<{ uid: string; displayName: string; email: string }> {
-  const header = request.headers.get("authorization") || "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
-    throw new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  const decoded = await getAdminAuth().verifyIdToken(match[1]);
-  const profile = await getAdminDb().collection("users").doc(decoded.uid).get();
-  const role = profile.data()?.role;
-  if (!profile.exists || role !== "admin") {
-    throw new Response(JSON.stringify({ error: "Admin access required" }), {
-      status: 403,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-  const data = profile.data()!;
-  return {
-    uid: decoded.uid,
-    displayName: String(data.displayName || "").trim(),
-    email: String(data.email || "").trim(),
-  };
-}
-
 /** Authenticated admin check that Admin SDK env is present and PEM parses. */
 export async function GET(request: Request) {
   try {
-    if (!isAdminConfigured()) {
+    const notConfigured = ensureAdminConfigured();
+    if (notConfigured) {
       return NextResponse.json(
         {
           ok: false,
@@ -88,15 +66,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    if (!isAdminConfigured()) {
-      return NextResponse.json(
-        {
-          error:
-            "Firebase Admin is not configured. Add FIREBASE_ADMIN_* env vars.",
-        },
-        { status: 503 }
-      );
-    }
+    const notConfigured = ensureAdminConfigured();
+    if (notConfigured) return notConfigured;
 
     const actor = await requireAppAdmin(request);
 
@@ -172,10 +143,7 @@ export async function POST(request: Request) {
       return error;
     }
 
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code: string }).code)
-        : "";
+    const code = firebaseErrorCode(error);
 
     if (code === "auth/email-already-exists") {
       return NextResponse.json(
@@ -198,19 +166,16 @@ export async function POST(request: Request) {
 
     const message =
       error instanceof Error ? error.message : String(error ?? "");
-    const looksLikeCredentialIssue =
-      /FIREBASE_ADMIN_|private key|PEM|DECODER|credential|service account/i.test(
-        message
-      );
+    const credentialIssue = looksLikeAdminCredentialIssue(message);
 
     console.error("POST /api/users failed", error);
     return NextResponse.json(
       {
-        error: looksLikeCredentialIssue
+        error: credentialIssue
           ? "Firebase Admin credentials are invalid on this host. Check FIREBASE_ADMIN_PRIVATE_KEY (use \\n newlines)."
           : "Failed to create user",
       },
-      { status: looksLikeCredentialIssue ? 503 : 500 }
+      { status: credentialIssue ? 503 : 500 }
     );
   }
 }
