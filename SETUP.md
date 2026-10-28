@@ -21,7 +21,7 @@ FIREBASE_ADMIN_CLIENT_EMAIL=firebase-adminsdk-...@your-project.iam.gserviceaccou
 FIREBASE_ADMIN_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 ```
 
-Keep the private key on **one line** with `\n` escape sequences. Never commit this file or use `NEXT_PUBLIC_` for Admin vars.
+`FIREBASE_ADMIN_PRIVATE_KEY` must be **double-quoted**, on **one line**, with real newlines turned into `\n`. See [`.env.local.example`](.env.local.example) for correct vs wrong formats. Never commit this file or use `NEXT_PUBLIC_` for Admin vars.
 
 Restart `npm run dev` after changing env vars.
 

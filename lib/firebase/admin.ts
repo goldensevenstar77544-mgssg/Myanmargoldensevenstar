@@ -12,7 +12,25 @@ function requiredEnv(name: string): string {
 }
 
 function getPrivateKey(): string {
-  return requiredEnv("FIREBASE_ADMIN_PRIVATE_KEY").replace(/\\n/g, "\n");
+  let key = requiredEnv("FIREBASE_ADMIN_PRIVATE_KEY").trim();
+  // Hosting UIs sometimes wrap the value in quotes.
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  // Support both "\n" escapes (typical .env) and real multiline secrets.
+  key = key.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (
+    !key.includes("-----BEGIN PRIVATE KEY-----") ||
+    !key.includes("-----END PRIVATE KEY-----")
+  ) {
+    throw new Error(
+      "FIREBASE_ADMIN_PRIVATE_KEY must be a PEM key with BEGIN/END lines (see .env.local.example)"
+    );
+  }
+  return key;
 }
 
 function getStorageBucketName(): string {

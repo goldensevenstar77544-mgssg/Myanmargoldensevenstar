@@ -43,6 +43,49 @@ async function requireAppAdmin(
   };
 }
 
+/** Authenticated admin check that Admin SDK env is present and PEM parses. */
+export async function GET(request: Request) {
+  try {
+    if (!isAdminConfigured()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          adminConfigured: false,
+          error:
+            "Firebase Admin is not configured. Add FIREBASE_ADMIN_* env vars.",
+        },
+        { status: 503 }
+      );
+    }
+
+    await requireAppAdmin(request);
+    // Force credential/PEM parse so bad keys surface here.
+    getAdminAuth();
+
+    return NextResponse.json({ ok: true, adminConfigured: true });
+  } catch (error) {
+    if (error instanceof Response) {
+      return error;
+    }
+
+    const message =
+      error instanceof Error ? error.message : String(error ?? "");
+    console.error("GET /api/users failed", error);
+    return NextResponse.json(
+      {
+        ok: false,
+        adminConfigured: isAdminConfigured(),
+        error: /FIREBASE_ADMIN_|PRIVATE KEY|PEM|DECODER|credential/i.test(
+          message
+        )
+          ? message
+          : "Firebase Admin credentials failed to initialize",
+      },
+      { status: 503 }
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
     if (!isAdminConfigured()) {
@@ -140,6 +183,12 @@ export async function POST(request: Request) {
         { status: 409 }
       );
     }
+    if (code === "auth/invalid-email") {
+      return NextResponse.json(
+        { error: "Valid email is required" },
+        { status: 400 }
+      );
+    }
     if (code === "auth/invalid-password") {
       return NextResponse.json(
         { error: "Password does not meet Firebase requirements" },
@@ -147,10 +196,21 @@ export async function POST(request: Request) {
       );
     }
 
+    const message =
+      error instanceof Error ? error.message : String(error ?? "");
+    const looksLikeCredentialIssue =
+      /FIREBASE_ADMIN_|private key|PEM|DECODER|credential|service account/i.test(
+        message
+      );
+
     console.error("POST /api/users failed", error);
     return NextResponse.json(
-      { error: "Failed to create user" },
-      { status: 500 }
+      {
+        error: looksLikeCredentialIssue
+          ? "Firebase Admin credentials are invalid on this host. Check FIREBASE_ADMIN_PRIVATE_KEY (use \\n newlines)."
+          : "Failed to create user",
+      },
+      { status: looksLikeCredentialIssue ? 503 : 500 }
     );
   }
 }

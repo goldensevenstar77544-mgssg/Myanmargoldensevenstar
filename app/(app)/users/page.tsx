@@ -109,6 +109,22 @@ export default function UsersPage() {
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!firebaseUser) return;
+
+    const nextEmail = email.trim();
+    const nextName = displayName.trim();
+    if (!nextName) {
+      toast.error("Display name is required");
+      return;
+    }
+    if (!nextEmail || !nextEmail.includes("@")) {
+      toast.error("Valid email is required");
+      return;
+    }
+    if (password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+
     setSaving(true);
     try {
       const token = await firebaseUser.getIdToken();
@@ -119,23 +135,44 @@ export default function UsersPage() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          email,
+          email: nextEmail,
           password,
-          displayName,
+          displayName: nextName,
           role,
         }),
       });
-      const data = (await res.json()) as { error?: string };
+      // Avoid response.json() — empty/HTML bodies make WebKit throw
+      // "The string did not match the expected pattern."
+      const raw = await res.text();
+      let data: { error?: string } = {};
+      if (raw) {
+        try {
+          data = JSON.parse(raw) as { error?: string };
+        } catch {
+          throw new Error(
+            `Create user failed (HTTP ${res.status}). Server returned non-JSON — check FIREBASE_ADMIN_* on the host.`
+          );
+        }
+      } else if (!res.ok) {
+        throw new Error(
+          `Create user failed (HTTP ${res.status}). Empty response — check FIREBASE_ADMIN_* on the host.`
+        );
+      }
       if (!res.ok) {
-        throw new Error(data.error || "Failed to create user");
+        throw new Error(data.error || `Failed to create user (HTTP ${res.status})`);
       }
       toast.success("User created");
       setOpen(false);
       await load();
     } catch (error) {
       console.error(error);
+      const message =
+        error instanceof Error ? error.message : "Failed to create user";
+      // Never surface the cryptic WebKit JSON/parse message as-is.
       toast.error(
-        error instanceof Error ? error.message : "Failed to create user"
+        /did not match the expected pattern/i.test(message)
+          ? "Create user failed. Check FIREBASE_ADMIN_* env on the host (see .env.local.example)."
+          : message
       );
     } finally {
       setSaving(false);
@@ -279,7 +316,8 @@ export default function UsersPage() {
       {canManage && (
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
-          <form onSubmit={onCreate}>
+          {/* noValidate: WebKit type=email shows "string did not match the expected pattern" */}
+          <form onSubmit={onCreate} noValidate>
             <DialogHeader>
               <DialogTitle>Create user</DialogTitle>
             </DialogHeader>
@@ -297,7 +335,8 @@ export default function UsersPage() {
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
-                  type="email"
+                  type="text"
+                  inputMode="email"
                   autoComplete="off"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
