@@ -44,6 +44,10 @@ Full Firebase setup, rules deploy, first Approver/Checker bootstrap, summary bac
 
 Product scope and workflow details: **[systemdescription.md](./systemdescription.md)**
 
+Firestore collections, fields, rollups, and Storage paths: **[DATABASE.md](./DATABASE.md)**
+
+Next.js API routes and Vercel deploy: **[DEPLOYMENT.md](./DEPLOYMENT.md)**
+
 ## Scripts
 
 | Command | Purpose |
