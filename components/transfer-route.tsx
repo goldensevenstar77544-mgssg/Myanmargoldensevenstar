@@ -1,4 +1,4 @@
-import { cn } from "@/lib/utils";
+import { cn, formatMMK } from "@/lib/utils";
 
 export function TransferRoute({
   fromBusiness,
@@ -47,6 +47,54 @@ export function TransferRoute({
         </div>
         <div className="truncate text-zinc-950">{to}</div>
       </div>
+    </div>
+  );
+}
+
+function transferPlaceLabel(
+  business?: string | null,
+  account?: string | null
+): string {
+  const parts = [business?.trim(), account?.trim()].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
+/** Two-line transfer amount: −MMK from Business · Account / +MMK to … */
+export function TransferAmount({
+  amount,
+  fromBusiness,
+  fromAccount,
+  toBusiness,
+  toAccount,
+  className,
+  compact = false,
+}: {
+  amount: number;
+  fromBusiness?: string | null;
+  fromAccount?: string | null;
+  toBusiness?: string | null;
+  toAccount?: string | null;
+  className?: string;
+  compact?: boolean;
+}) {
+  const from = transferPlaceLabel(fromBusiness, fromAccount);
+  const to = transferPlaceLabel(toBusiness, toAccount);
+  return (
+    <div
+      className={cn(
+        "space-y-0.5 tabular-nums leading-snug",
+        compact ? "text-xs" : "text-sm",
+        className
+      )}
+    >
+      <p className="font-semibold text-rose-700">
+        −{formatMMK(amount)}
+        <span className="font-normal text-zinc-500"> from {from}</span>
+      </p>
+      <p className="font-semibold text-emerald-700">
+        +{formatMMK(amount)}
+        <span className="font-normal text-zinc-500"> to {to}</span>
+      </p>
     </div>
   );
 }

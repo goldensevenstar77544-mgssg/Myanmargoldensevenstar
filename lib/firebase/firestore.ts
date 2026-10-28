@@ -1227,14 +1227,25 @@ export async function createTransaction(input: {
   const ref = doc(collection(db, "transactions"));
   const auditRef = doc(collection(db, "auditLogs"));
   const accountRef = doc(db, "accounts", input.accountId);
+  const holdingRef = businessAccountBalanceRef(
+    input.businessId,
+    input.accountId
+  );
 
   await runTransaction(db, async (transaction) => {
     const accountSnap = await transaction.get(accountRef);
     if (!accountSnap.exists()) throw new Error("Account not found");
 
+    const holdingSnap = await transaction.get(holdingRef);
+    const holdingBalance = Number(
+      holdingSnap.exists() ? holdingSnap.data()?.currentBalance ?? 0 : 0
+    );
     const currentBalance = Number(accountSnap.data()?.currentBalance ?? 0);
     if (input.direction === "expense" && amount > currentBalance) {
       throw new Error("Amount exceeds current account balance");
+    }
+    if (input.direction === "expense" && amount > holdingBalance) {
+      throw new Error("Amount exceeds business balance in this account");
     }
 
     const counter = await readCounterSeq(transaction, input.date);
@@ -1325,18 +1336,31 @@ export async function createTransfer(input: {
   const inAuditRef = doc(collection(db, "auditLogs"));
   const fromAccountRef = doc(db, "accounts", input.fromAccountId);
   const toAccountRef = doc(db, "accounts", input.toAccountId);
+  const fromHoldingRef = businessAccountBalanceRef(
+    input.fromBusinessId,
+    input.fromAccountId
+  );
 
   await runTransaction(db, async (transaction) => {
-    const [fromSnap, toSnap] = await Promise.all([
+    const [fromSnap, toSnap, fromHoldingSnap] = await Promise.all([
       transaction.get(fromAccountRef),
       transaction.get(toAccountRef),
+      transaction.get(fromHoldingRef),
     ]);
     if (!fromSnap.exists() || !toSnap.exists()) {
       throw new Error("Account not found");
     }
     const fromBalance = Number(fromSnap.data()?.currentBalance ?? 0);
+    const fromHoldingBalance = Number(
+      fromHoldingSnap.exists()
+        ? fromHoldingSnap.data()?.currentBalance ?? 0
+        : 0
+    );
     if (amount > fromBalance) {
       throw new Error("Amount exceeds current account balance");
+    }
+    if (amount > fromHoldingBalance) {
+      throw new Error("Amount exceeds business balance in this account");
     }
     const fromAccountLabel = formatAccountLabel(
       mapAccount(fromSnap.data()!, fromSnap.id)
@@ -1756,11 +1780,17 @@ async function approveSingleTransaction(
     );
 
     const currentBalance = Number(accountSnap.data().currentBalance ?? 0);
+    const holdingBalance = Number(
+      holdingSnap.exists() ? holdingSnap.data()?.currentBalance ?? 0 : 0
+    );
     const pendingCount = Number(accountSnap.data().pendingCount ?? 0);
     const approvedCount = Number(accountSnap.data().approvedCount ?? 0);
     const delta = data.direction === "income" ? amount : -amount;
     if (data.direction === "expense" && amount > currentBalance) {
       throw new Error("Amount exceeds current account balance");
+    }
+    if (data.direction === "expense" && amount > holdingBalance) {
+      throw new Error("Amount exceeds business balance in this account");
     }
     const name = approverName.trim();
 
@@ -1887,13 +1917,20 @@ export async function approveTransferGroup(
     for (let i = 0; i < legs.length; i++) {
       const leg = legs[i]!;
       const accountSnap = accountSnaps[i]!;
+      const holdingSnap = holdingSnaps[i]!;
       const amount = leg.amount;
       const currentBalance = Number(accountSnap.data()?.currentBalance ?? 0);
+      const holdingBalance = Number(
+        holdingSnap.exists() ? holdingSnap.data()?.currentBalance ?? 0 : 0
+      );
       const pendingCount = Number(accountSnap.data()?.pendingCount ?? 0);
       const approvedCount = Number(accountSnap.data()?.approvedCount ?? 0);
       const delta = leg.direction === "income" ? amount : -amount;
       if (leg.direction === "expense" && amount > currentBalance) {
         throw new Error("Amount exceeds current account balance");
+      }
+      if (leg.direction === "expense" && amount > holdingBalance) {
+        throw new Error("Amount exceeds business balance in this account");
       }
 
       transaction.update(legRefs[i]!, {
@@ -1911,7 +1948,7 @@ export async function approveTransferGroup(
       });
       applyHoldingDeltaInTxn(
         transaction,
-        holdingSnaps[i]!,
+        holdingSnap,
         holdingRefs[i]!,
         leg.businessId,
         leg.accountId,

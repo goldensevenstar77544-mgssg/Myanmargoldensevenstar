@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { ChevronDown } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +28,7 @@ import {
   createTransaction,
   createTransfer,
   listAccounts,
+  listAllBusinessAccountBalances,
   listBusinesses,
   updateTransaction,
 } from "@/lib/firebase/firestore";
@@ -35,11 +37,12 @@ import { canCreateTransaction, userDisplayName } from "@/lib/permissions";
 import type {
   Account,
   Business,
+  BusinessAccountBalance,
   TransactionDirection,
 } from "@/lib/types";
 import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "@/lib/types";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
-import { formatAccountLabel, formatMMK } from "@/lib/utils";
+import { cn, formatAccountLabel, formatMMK } from "@/lib/utils";
 import {
   TransactionAttachments,
   revokePendingFiles,
@@ -49,11 +52,79 @@ import { PageBackButton } from "@/components/page-back-button";
 
 type EntryMode = "standard" | "transfer";
 
+function shortAccountLabel(account: Account): string {
+  if (account.type === "cash") return account.name;
+  const bank = account.bankName?.trim();
+  const number = account.accountNumber?.trim();
+  if (bank && number) return `${bank} ${number}`;
+  if (bank) return bank;
+  return account.name;
+}
+
+function BusinessHoldingsHint({
+  bizId,
+  accounts,
+  total,
+  balanceFor,
+}: {
+  bizId: string;
+  accounts: Account[];
+  total: number;
+  balanceFor: (accountId: string) => number;
+}) {
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    setOpen(true);
+  }, [bizId]);
+
+  if (!bizId || accounts.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-zinc-200 bg-zinc-50 text-xs text-zinc-600">
+      <button
+        type="button"
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left font-medium text-zinc-700 hover:bg-zinc-100/80"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>In each account</span>
+        <span className="flex items-center gap-2">
+          <span className="tabular-nums font-normal text-zinc-500">
+            {formatMMK(total)}
+          </span>
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 text-zinc-500 transition-transform",
+              open ? "rotate-0" : "-rotate-90"
+            )}
+          />
+        </span>
+      </button>
+      {open && (
+        <ul className="space-y-1 border-t border-zinc-200 px-3 py-2">
+          {accounts.map((a) => (
+            <li
+              key={a.id}
+              className="flex items-baseline justify-between gap-3"
+            >
+              <span className="truncate">{formatAccountLabel(a)}</span>
+              <span className="shrink-0 tabular-nums text-zinc-800">
+                {formatMMK(balanceFor(a.id))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function NewTransactionPage() {
   const { profile } = useAuth();
   const router = useRouter();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [holdings, setHoldings] = useState<BusinessAccountBalance[]>([]);
   const [mode, setMode] = useState<EntryMode>("standard");
   const [businessId, setBusinessId] = useState("");
   const [accountId, setAccountId] = useState("");
@@ -68,12 +139,29 @@ export default function NewTransactionPage() {
   const [description, setDescription] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [saving, setSaving] = useState(false);
+  const [expandedBusinessIds, setExpandedBusinessIds] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  function toggleBusinessExpanded(bizId: string) {
+    setExpandedBusinessIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(bizId)) next.delete(bizId);
+      else next.add(bizId);
+      return next;
+    });
+  }
 
   const loadFormData = useCallback(async () => {
     try {
-      const [biz, acc] = await Promise.all([listBusinesses(), listAccounts()]);
+      const [biz, acc, holdingRows] = await Promise.all([
+        listBusinesses(),
+        listAccounts(),
+        listAllBusinessAccountBalances(),
+      ]);
       setBusinesses(biz.filter((b) => b.status === "active"));
       setAccounts(acc.filter((a) => a.status === "active"));
+      setHoldings(holdingRows);
     } catch (error) {
       console.error(error);
       toast.error("Failed to load form data");
@@ -81,6 +169,140 @@ export default function NewTransactionPage() {
   }, []);
 
   useLoadOnMount(loadFormData);
+
+  function holdingBalanceFor(bizId: string, acctId: string): number {
+    const holding = holdings.find(
+      (h) => h.businessId === bizId && h.accountId === acctId
+    );
+    return holding?.currentBalance ?? 0;
+  }
+
+  function totalForBusiness(bizId: string): number {
+    return holdings
+      .filter((h) => h.businessId === bizId)
+      .reduce((sum, h) => sum + h.currentBalance, 0);
+  }
+
+  function BusinessSelectValue({ bizId }: { bizId: string }) {
+    const business = businesses.find((b) => b.id === bizId);
+    if (!business) return null;
+    return (
+      <span className="flex w-full min-w-0 items-center justify-between gap-3 pr-1">
+        <span className="truncate">{business.name}</span>
+        <span className="shrink-0 tabular-nums text-zinc-500">
+          {formatMMK(totalForBusiness(bizId))}
+        </span>
+      </span>
+    );
+  }
+
+  function BusinessSelectItemContent({ business }: { business: Business }) {
+    const expanded = expandedBusinessIds.has(business.id);
+    return (
+      <span className="flex w-full flex-col gap-1.5 py-0.5">
+        <span className="flex items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5">
+            {accounts.length > 0 && (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={
+                  expanded
+                    ? `Hide accounts for ${business.name}`
+                    : `Show accounts for ${business.name}`
+                }
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  toggleBusinessExpanded(business.id);
+                }}
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 transition-transform",
+                    expanded ? "rotate-0" : "-rotate-90"
+                  )}
+                />
+              </button>
+            )}
+            <span className="truncate font-medium text-zinc-900">
+              {business.name}
+            </span>
+          </span>
+          <span className="shrink-0 tabular-nums text-zinc-700">
+            {formatMMK(totalForBusiness(business.id))}
+          </span>
+        </span>
+        {expanded && accounts.length > 0 && (
+          <span className="space-y-0.5 border-t border-zinc-100 pt-1.5 pl-6">
+            {accounts.map((a) => (
+              <span
+                key={a.id}
+                className="flex items-baseline justify-between gap-3 text-xs text-zinc-500"
+              >
+                <span className="truncate">{shortAccountLabel(a)}</span>
+                <span className="shrink-0 tabular-nums">
+                  {formatMMK(holdingBalanceFor(business.id, a.id))}
+                </span>
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  /** Spendable amount for a business in an account (holding capped by account cash). */
+  function availableInAccount(bizId: string, account: Account): number {
+    if (!bizId) return account.currentBalance;
+    return Math.min(
+      holdingBalanceFor(bizId, account.id),
+      account.currentBalance
+    );
+  }
+
+  function AccountSelectValue({
+    acctId,
+    bizId,
+  }: {
+    acctId: string;
+    bizId: string;
+  }) {
+    const account = accounts.find((a) => a.id === acctId);
+    if (!account) return null;
+    const balance = availableInAccount(bizId, account);
+    return (
+      <span className="flex w-full min-w-0 items-center justify-between gap-3 pr-1">
+        <span className="truncate">{formatAccountLabel(account)}</span>
+        <span className="shrink-0 tabular-nums text-zinc-500">
+          {formatMMK(balance)}
+        </span>
+      </span>
+    );
+  }
+
+  function AccountSelectItemContent({
+    account,
+    bizId,
+  }: {
+    account: Account;
+    bizId: string;
+  }) {
+    const balance = availableInAccount(bizId, account);
+    return (
+      <span className="flex w-full items-baseline justify-between gap-3">
+        <span className="min-w-0 truncate">{formatAccountLabel(account)}</span>
+        <span className="shrink-0 tabular-nums text-zinc-600">
+          {formatMMK(balance)}
+        </span>
+      </span>
+    );
+  }
 
   const categories =
     direction === "income"
@@ -131,12 +353,15 @@ export default function NewTransactionPage() {
           return;
         }
         const fromAccount = accounts.find((a) => a.id === fromAccountId);
-        if (fromAccount && value > fromAccount.currentBalance) {
-          toast.error(
-            `Amount exceeds current balance (${formatMMK(fromAccount.currentBalance)})`
-          );
-          setSaving(false);
-          return;
+        if (fromAccount) {
+          const available = availableInAccount(fromBusinessId, fromAccount);
+          if (value > available) {
+            toast.error(
+              `Amount exceeds available balance (${formatMMK(available)})`
+            );
+            setSaving(false);
+            return;
+          }
         }
         const { outId } = await createTransfer({
           fromBusinessId,
@@ -184,12 +409,15 @@ export default function NewTransactionPage() {
       }
       if (direction === "expense") {
         const account = accounts.find((a) => a.id === accountId);
-        if (account && value > account.currentBalance) {
-          toast.error(
-            `Amount exceeds current balance (${formatMMK(account.currentBalance)})`
-          );
-          setSaving(false);
-          return;
+        if (account) {
+          const available = availableInAccount(businessId, account);
+          if (value > available) {
+            toast.error(
+              `Amount exceeds available balance (${formatMMK(available)})`
+            );
+            setSaving(false);
+            return;
+          }
         }
       }
       const id = await createTransaction({
@@ -280,16 +508,33 @@ export default function NewTransactionPage() {
                     onValueChange={setBusinessId}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select business" />
+                      <SelectValue placeholder="Select business">
+                        {businessId ? (
+                          <BusinessSelectValue bizId={businessId} />
+                        ) : undefined}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {businesses.map((b) => (
-                        <SelectItem key={b.id} value={b.id}>
-                          {b.name}
+                        <SelectItem
+                          key={b.id}
+                          value={b.id}
+                          textValue={`${b.name} ${formatMMK(totalForBusiness(b.id))}`}
+                          className="items-start py-2"
+                        >
+                          <BusinessSelectItemContent business={b} />
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <BusinessHoldingsHint
+                    bizId={businessId}
+                    accounts={accounts}
+                    total={totalForBusiness(businessId)}
+                    balanceFor={(acctId) =>
+                      holdingBalanceFor(businessId, acctId)
+                    }
+                  />
                 </div>
 
                 <div className="space-y-2">
@@ -299,12 +544,28 @@ export default function NewTransactionPage() {
                     onValueChange={setAccountId}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select bank or cash account" />
+                      <SelectValue placeholder="Select bank or cash account">
+                        {accountId ? (
+                          <AccountSelectValue
+                            acctId={accountId}
+                            bizId={businessId}
+                          />
+                        ) : undefined}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {accounts.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {`${formatAccountLabel(a)} · ${formatMMK(a.currentBalance)}`}
+                        <SelectItem
+                          key={a.id}
+                          value={a.id}
+                          textValue={`${formatAccountLabel(a)} ${formatMMK(
+                            availableInAccount(businessId, a)
+                          )}`}
+                        >
+                          <AccountSelectItemContent
+                            account={a}
+                            bizId={businessId}
+                          />
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -361,16 +622,33 @@ export default function NewTransactionPage() {
                       onValueChange={setFromBusinessId}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Source business" />
+                        <SelectValue placeholder="Source business">
+                          {fromBusinessId ? (
+                            <BusinessSelectValue bizId={fromBusinessId} />
+                          ) : undefined}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {businesses.map((b) => (
-                          <SelectItem key={b.id} value={b.id}>
-                            {b.name}
+                          <SelectItem
+                            key={b.id}
+                            value={b.id}
+                            textValue={`${b.name} ${formatMMK(totalForBusiness(b.id))}`}
+                            className="items-start py-2"
+                          >
+                            <BusinessSelectItemContent business={b} />
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                    <BusinessHoldingsHint
+                      bizId={fromBusinessId}
+                      accounts={accounts}
+                      total={totalForBusiness(fromBusinessId)}
+                      balanceFor={(acctId) =>
+                        holdingBalanceFor(fromBusinessId, acctId)
+                      }
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label>To business</Label>
@@ -379,16 +657,33 @@ export default function NewTransactionPage() {
                       onValueChange={setToBusinessId}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Destination business" />
+                        <SelectValue placeholder="Destination business">
+                          {toBusinessId ? (
+                            <BusinessSelectValue bizId={toBusinessId} />
+                          ) : undefined}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {businesses.map((b) => (
-                          <SelectItem key={b.id} value={b.id}>
-                            {b.name}
+                          <SelectItem
+                            key={b.id}
+                            value={b.id}
+                            textValue={`${b.name} ${formatMMK(totalForBusiness(b.id))}`}
+                            className="items-start py-2"
+                          >
+                            <BusinessSelectItemContent business={b} />
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                    <BusinessHoldingsHint
+                      bizId={toBusinessId}
+                      accounts={accounts}
+                      total={totalForBusiness(toBusinessId)}
+                      balanceFor={(acctId) =>
+                        holdingBalanceFor(toBusinessId, acctId)
+                      }
+                    />
                   </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -399,12 +694,28 @@ export default function NewTransactionPage() {
                       onValueChange={setFromAccountId}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Source account" />
+                        <SelectValue placeholder="Source account">
+                          {fromAccountId ? (
+                            <AccountSelectValue
+                              acctId={fromAccountId}
+                              bizId={fromBusinessId}
+                            />
+                          ) : undefined}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {accounts.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {`${formatAccountLabel(a)} · ${formatMMK(a.currentBalance)}`}
+                          <SelectItem
+                            key={a.id}
+                            value={a.id}
+                            textValue={`${formatAccountLabel(a)} ${formatMMK(
+                              availableInAccount(fromBusinessId, a)
+                            )}`}
+                          >
+                            <AccountSelectItemContent
+                              account={a}
+                              bizId={fromBusinessId}
+                            />
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -417,12 +728,28 @@ export default function NewTransactionPage() {
                       onValueChange={setToAccountId}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Destination account" />
+                        <SelectValue placeholder="Destination account">
+                          {toAccountId ? (
+                            <AccountSelectValue
+                              acctId={toAccountId}
+                              bizId={toBusinessId}
+                            />
+                          ) : undefined}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {accounts.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {`${formatAccountLabel(a)} · ${formatMMK(a.currentBalance)}`}
+                          <SelectItem
+                            key={a.id}
+                            value={a.id}
+                            textValue={`${formatAccountLabel(a)} ${formatMMK(
+                              availableInAccount(toBusinessId, a)
+                            )}`}
+                          >
+                            <AccountSelectItemContent
+                              account={a}
+                              bizId={toBusinessId}
+                            />
                           </SelectItem>
                         ))}
                       </SelectContent>

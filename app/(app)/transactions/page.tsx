@@ -60,7 +60,10 @@ import {
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
 import { useMinWidth } from "@/lib/use-min-width";
 import { MobileFab, MobileFabStack } from "@/components/mobile-fab";
-import { TransferRoute } from "@/components/transfer-route";
+import {
+  TransferAmount,
+  TransferRoute,
+} from "@/components/transfer-route";
 
 type AppliedFilters = {
   status: string;
@@ -268,6 +271,16 @@ export default function TransactionsPage() {
     () =>
       Object.fromEntries(
         accounts.map((a) => [a.id, formatAccountLabel(a)])
+      ),
+    [accounts]
+  );
+  const shortAccountMap = useMemo(
+    () =>
+      Object.fromEntries(
+        accounts.map((a) => [
+          a.id,
+          a.type === "cash" ? a.name : a.bankName?.trim() || a.name,
+        ])
       ),
     [accounts]
   );
@@ -812,15 +825,43 @@ export default function TransactionsPage() {
                           <TableCell className="max-w-[14rem] truncate text-zinc-500">
                             {tx.description?.trim() || "—"}
                           </TableCell>
-                          <TableCell
-                            className={
-                              tx.direction === "income"
-                                ? "font-medium text-emerald-700"
-                                : "font-medium text-rose-700"
-                            }
-                          >
-                            {tx.direction === "income" ? "+" : "−"}
-                            {formatMMK(tx.amount)}
+                          <TableCell>
+                            {tx.transferGroupId ? (
+                              <TransferAmount
+                                amount={tx.amount}
+                                fromBusiness={
+                                  out?.businessId
+                                    ? businessMap[out.businessId]
+                                    : undefined
+                                }
+                                fromAccount={
+                                  out?.accountId
+                                    ? shortAccountMap[out.accountId]
+                                    : undefined
+                                }
+                                toBusiness={
+                                  inLeg?.businessId
+                                    ? businessMap[inLeg.businessId]
+                                    : undefined
+                                }
+                                toAccount={
+                                  inLeg?.accountId
+                                    ? shortAccountMap[inLeg.accountId]
+                                    : undefined
+                                }
+                              />
+                            ) : (
+                              <span
+                                className={
+                                  tx.direction === "income"
+                                    ? "font-medium text-emerald-700"
+                                    : "font-medium text-rose-700"
+                                }
+                              >
+                                {tx.direction === "income" ? "+" : "−"}
+                                {formatMMK(tx.amount)}
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={tx.status} />
@@ -906,20 +947,48 @@ export default function TransactionsPage() {
                           </div>
                           <StatusBadge status={tx.status} />
                         </div>
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-start justify-between gap-2">
                           <span className="truncate text-xs text-zinc-500">
                             {tx.makerName || "—"}
                           </span>
-                          <span
-                            className={
-                              tx.direction === "income"
-                                ? "text-sm font-semibold tabular-nums text-emerald-700"
-                                : "text-sm font-semibold tabular-nums text-rose-700"
-                            }
-                          >
-                            {tx.direction === "income" ? "+" : "−"}
-                            {formatMMK(tx.amount)}
-                          </span>
+                          {tx.transferGroupId ? (
+                            <TransferAmount
+                              compact
+                              className="text-right"
+                              amount={tx.amount}
+                              fromBusiness={
+                                out?.businessId
+                                  ? businessMap[out.businessId]
+                                  : undefined
+                              }
+                              fromAccount={
+                                out?.accountId
+                                  ? shortAccountMap[out.accountId]
+                                  : undefined
+                              }
+                              toBusiness={
+                                inLeg?.businessId
+                                  ? businessMap[inLeg.businessId]
+                                  : undefined
+                              }
+                              toAccount={
+                                inLeg?.accountId
+                                  ? shortAccountMap[inLeg.accountId]
+                                  : undefined
+                              }
+                            />
+                          ) : (
+                            <span
+                              className={
+                                tx.direction === "income"
+                                  ? "text-sm font-semibold tabular-nums text-emerald-700"
+                                  : "text-sm font-semibold tabular-nums text-rose-700"
+                              }
+                            >
+                              {tx.direction === "income" ? "+" : "−"}
+                              {formatMMK(tx.amount)}
+                            </span>
+                          )}
                         </div>
                       </Link>
                     );

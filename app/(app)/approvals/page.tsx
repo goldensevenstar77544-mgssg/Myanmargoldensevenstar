@@ -41,7 +41,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { TransferRoute } from "@/components/transfer-route";
+import {
+  TransferAmount,
+  TransferRoute,
+} from "@/components/transfer-route";
 import {
   approveTransaction,
   listAccounts,
@@ -115,6 +118,9 @@ type AppliedFilters = {
   dateFrom: string;
   dateTo: string;
 };
+
+/** Sentinel in business/account filters: show only internal transfers (not a real id). */
+const FILTER_TRANSFERS = "__transfers__";
 
 const MONTH_OPTIONS = [
   { value: 1, label: "Jan" },
@@ -214,6 +220,18 @@ export default function ApprovalsPage() {
       ),
     [accounts]
   );
+  const shortAccountMap = useMemo(
+    () =>
+      Object.fromEntries(
+        accounts.map((a) => [
+          a.id,
+          a.type === "cash"
+            ? a.name
+            : a.bankName?.trim() || a.name,
+        ])
+      ),
+    [accounts]
+  );
 
   const queue = useMemo(() => collapsePendingQueue(items), [items]);
 
@@ -236,23 +254,38 @@ export default function ApprovalsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const transferOnly = applied.direction === "transfer";
+      const businessIsTransfers = applied.businessId === FILTER_TRANSFERS;
+      const accountIsTransfers = applied.accountId === FILTER_TRANSFERS;
+      const typeIsTransfers = applied.direction === "transfer";
+      const businessIsSpecific =
+        applied.businessId !== "all" && !businessIsTransfers;
+      const accountIsSpecific =
+        applied.accountId !== "all" && !accountIsTransfers;
+      const transferOnly =
+        businessIsTransfers || accountIsTransfers || typeIsTransfers;
       const txsPage = await listTransactions({
         status: "pending",
         direction:
-          applied.direction === "all" || transferOnly
+          applied.direction === "all" || typeIsTransfers
             ? undefined
             : (applied.direction as TransactionDirection),
         transferOnly: transferOnly || undefined,
-        businessId:
-          applied.businessId === "all" ? undefined : applied.businessId,
-        accountId:
-          applied.accountId === "all" ? undefined : applied.accountId,
+        businessId: businessIsSpecific ? applied.businessId : undefined,
+        accountId: accountIsSpecific ? applied.accountId : undefined,
         dateFrom: applied.dateFrom || undefined,
         dateTo: applied.dateTo || undefined,
         pageSize: 100,
       });
-      setItems(txsPage.items);
+      // In/Out and a selected business/account are for non-transfer activity only.
+      const excludeTransfers =
+        businessIsSpecific ||
+        accountIsSpecific ||
+        applied.direction === "income" ||
+        applied.direction === "expense";
+      const nextItems = excludeTransfers
+        ? txsPage.items.filter((tx) => !tx.transferGroupId)
+        : txsPage.items;
+      setItems(nextItems);
     } catch (error) {
       console.error(error);
       toast.error("Failed to load approvals");
@@ -540,7 +573,10 @@ export default function ApprovalsPage() {
             title={
               businessId === "all"
                 ? "All businesses"
-                : businesses.find((b) => b.id === businessId)?.name || "Business"
+                : businessId === FILTER_TRANSFERS
+                  ? "Internal transfers"
+                  : businesses.find((b) => b.id === businessId)?.name ||
+                    "Business"
             }
             className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[11rem] sm:text-sm"
           >
@@ -548,6 +584,7 @@ export default function ApprovalsPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All businesses</SelectItem>
+            <SelectItem value={FILTER_TRANSFERS}>Internal transfers</SelectItem>
             {businesses.map((b) => (
               <SelectItem key={b.id} value={b.id}>
                 {b.name}
@@ -564,12 +601,14 @@ export default function ApprovalsPage() {
             title={
               accountId === "all"
                 ? "All accounts"
-                : (() => {
-                    const account = accounts.find((a) => a.id === accountId);
-                    return account
-                      ? formatAccountLabel(account)
-                      : "Account";
-                  })()
+                : accountId === FILTER_TRANSFERS
+                  ? "Internal transfers"
+                  : (() => {
+                      const account = accounts.find((a) => a.id === accountId);
+                      return account
+                        ? formatAccountLabel(account)
+                        : "Account";
+                    })()
             }
             className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[11rem] sm:text-sm"
           >
@@ -577,6 +616,7 @@ export default function ApprovalsPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All accounts</SelectItem>
+            <SelectItem value={FILTER_TRANSFERS}>Internal transfers</SelectItem>
             {accounts.map((a) => (
               <SelectItem key={a.id} value={a.id}>
                 {formatAccountLabel(a)}
@@ -712,20 +752,48 @@ export default function ApprovalsPage() {
                               </div>
                               <StatusBadge status={tx.status} />
                             </div>
-                            <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-start justify-between gap-2">
                               <span className="truncate text-xs text-zinc-500">
                                 {tx.makerName || "—"}
                               </span>
-                              <span
-                                className={
-                                  tx.direction === "income"
-                                    ? "text-sm font-semibold tabular-nums text-emerald-700"
-                                    : "text-sm font-semibold tabular-nums text-rose-700"
-                                }
-                              >
-                                {tx.direction === "income" ? "+" : "−"}
-                                {formatMMK(tx.amount)}
-                              </span>
+                              {tx.transferGroupId ? (
+                                <TransferAmount
+                                  compact
+                                  className="text-right"
+                                  amount={tx.amount}
+                                  fromBusiness={
+                                    pair?.out?.businessId
+                                      ? businessMap[pair.out.businessId]
+                                      : undefined
+                                  }
+                                  fromAccount={
+                                    pair?.out?.accountId
+                                      ? shortAccountMap[pair.out.accountId]
+                                      : undefined
+                                  }
+                                  toBusiness={
+                                    pair?.inLeg?.businessId
+                                      ? businessMap[pair.inLeg.businessId]
+                                      : undefined
+                                  }
+                                  toAccount={
+                                    pair?.inLeg?.accountId
+                                      ? shortAccountMap[pair.inLeg.accountId]
+                                      : undefined
+                                  }
+                                />
+                              ) : (
+                                <span
+                                  className={
+                                    tx.direction === "income"
+                                      ? "text-sm font-semibold tabular-nums text-emerald-700"
+                                      : "text-sm font-semibold tabular-nums text-rose-700"
+                                  }
+                                >
+                                  {tx.direction === "income" ? "+" : "−"}
+                                  {formatMMK(tx.amount)}
+                                </span>
+                              )}
                             </div>
                           </button>
                           {canAct ? (
@@ -850,15 +918,43 @@ export default function ApprovalsPage() {
                               <TableCell className="max-w-[14rem] truncate text-zinc-500">
                                 {tx.description?.trim() || "—"}
                               </TableCell>
-                              <TableCell
-                                className={
-                                  tx.direction === "income"
-                                    ? "font-medium text-emerald-700"
-                                    : "font-medium text-rose-700"
-                                }
-                              >
-                                {tx.direction === "income" ? "+" : "−"}
-                                {formatMMK(tx.amount)}
+                              <TableCell>
+                                {tx.transferGroupId ? (
+                                  <TransferAmount
+                                    amount={tx.amount}
+                                    fromBusiness={
+                                      pair?.out?.businessId
+                                        ? businessMap[pair.out.businessId]
+                                        : undefined
+                                    }
+                                    fromAccount={
+                                      pair?.out?.accountId
+                                        ? shortAccountMap[pair.out.accountId]
+                                        : undefined
+                                    }
+                                    toBusiness={
+                                      pair?.inLeg?.businessId
+                                        ? businessMap[pair.inLeg.businessId]
+                                        : undefined
+                                    }
+                                    toAccount={
+                                      pair?.inLeg?.accountId
+                                        ? shortAccountMap[pair.inLeg.accountId]
+                                        : undefined
+                                    }
+                                  />
+                                ) : (
+                                  <span
+                                    className={
+                                      tx.direction === "income"
+                                        ? "font-medium text-emerald-700"
+                                        : "font-medium text-rose-700"
+                                    }
+                                  >
+                                    {tx.direction === "income" ? "+" : "−"}
+                                    {formatMMK(tx.amount)}
+                                  </span>
+                                )}
                               </TableCell>
                               <TableCell>
                                 <StatusBadge status={tx.status} />
