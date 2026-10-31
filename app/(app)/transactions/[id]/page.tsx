@@ -57,6 +57,7 @@ import type {
 } from "@/lib/types";
 import { CATEGORY_LABELS, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "@/lib/types";
 import {
+  cn,
   formatDate,
   formatDateTime,
   formatMMK,
@@ -64,10 +65,66 @@ import {
 } from "@/lib/utils";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
 import { TransactionAttachments } from "@/components/transaction-attachments";
-import { TransferRoute } from "@/components/transfer-route";
 import { PageBackButton } from "@/components/page-back-button";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+
+function accountNameLabel(account: Account): string {
+  if (account.type === "cash") return account.name;
+  return account.bankName?.trim() || account.name;
+}
+
+function accountDetailLines(account: Account): string[] {
+  if (account.type === "cash") return ["Cash in hand"];
+  return [account.accountNumber, account.bankBranch]
+    .map((v) => v?.trim())
+    .filter((v): v is string => Boolean(v));
+}
+
+function AccountLines({
+  account,
+  className,
+}: {
+  account?: Account | null;
+  className?: string;
+}) {
+  if (!account) {
+    return <span className={className}>—</span>;
+  }
+  const details = accountDetailLines(account);
+  return (
+    <div className={cn("space-y-0.5 leading-snug", className)}>
+      <p className="font-medium text-zinc-950">{accountNameLabel(account)}</p>
+      {details.map((line, index) => (
+        <p key={`${index}-${line}`} className="text-sm text-zinc-500">
+          {line}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function TransferPlace({
+  label,
+  business,
+  account,
+}: {
+  label: string;
+  business?: string | null;
+  account?: Account | null;
+}) {
+  return (
+    <div>
+      <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+        {label}
+      </div>
+      <div className="mt-1 space-y-0.5 leading-snug">
+        <p className="font-medium text-zinc-950">{business?.trim() || "—"}</p>
+        <AccountLines account={account} />
+      </div>
+    </div>
+  );
+}
 
 export default function TransactionDetailPage() {
   const params = useParams<{ id: string }>();
@@ -132,11 +189,8 @@ export default function TransactionDetailPage() {
     () => Object.fromEntries(businesses.map((b) => [b.id, b.name])),
     [businesses]
   );
-  const accountMap = useMemo(
-    () =>
-      Object.fromEntries(
-        accounts.map((a) => [a.id, formatAccountLabel(a)])
-      ),
+  const accountById = useMemo(
+    () => Object.fromEntries(accounts.map((a) => [a.id, a])),
     [accounts]
   );
 
@@ -290,28 +344,34 @@ export default function TransactionDetailPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <TransferRoute
-              fromBusiness={
-                businessMap[
-                  (tx.direction === "expense" ? tx : linkedTx).businessId
-                ]
-              }
-              fromAccount={
-                accountMap[
-                  (tx.direction === "expense" ? tx : linkedTx).accountId
-                ]
-              }
-              toBusiness={
-                businessMap[
-                  (tx.direction === "income" ? tx : linkedTx).businessId
-                ]
-              }
-              toAccount={
-                accountMap[
-                  (tx.direction === "income" ? tx : linkedTx).accountId
-                ]
-              }
-            />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TransferPlace
+                label="From"
+                business={
+                  businessMap[
+                    (tx.direction === "expense" ? tx : linkedTx).businessId
+                  ]
+                }
+                account={
+                  accountById[
+                    (tx.direction === "expense" ? tx : linkedTx).accountId
+                  ]
+                }
+              />
+              <TransferPlace
+                label="To"
+                business={
+                  businessMap[
+                    (tx.direction === "income" ? tx : linkedTx).businessId
+                  ]
+                }
+                account={
+                  accountById[
+                    (tx.direction === "income" ? tx : linkedTx).accountId
+                  ]
+                }
+              />
+            </div>
             <Button asChild variant="outline" size="sm">
               <Link href={`/transactions/${linkedTx.id}`}>
                 Open linked leg ({linkedTx.displayId})
@@ -525,8 +585,8 @@ export default function TransactionDetailPage() {
                 <dt className="text-xs uppercase tracking-wide text-zinc-500">
                   Bank / cash
                 </dt>
-                <dd className="mt-1 font-medium">
-                  {accountMap[tx.accountId] || "—"}
+                <dd className="mt-1">
+                  <AccountLines account={accountById[tx.accountId]} />
                 </dd>
               </div>
               <div>

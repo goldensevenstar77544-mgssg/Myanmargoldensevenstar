@@ -105,9 +105,11 @@ function BusinessHoldingsHint({
           {accounts.map((a) => (
             <li
               key={a.id}
-              className="flex items-baseline justify-between gap-3"
+              className="flex min-w-0 items-baseline justify-between gap-3"
             >
-              <span className="truncate">{formatAccountLabel(a)}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {formatAccountLabel(a)}
+              </span>
               <span className="shrink-0 tabular-nums text-zinc-800">
                 {formatMMK(balanceFor(a.id))}
               </span>
@@ -188,7 +190,7 @@ export default function NewTransactionPage() {
     if (!business) return null;
     return (
       <span className="flex w-full min-w-0 items-center justify-between gap-3 pr-1">
-        <span className="truncate">{business.name}</span>
+        <span className="min-w-0 flex-1 truncate">{business.name}</span>
         <span className="shrink-0 tabular-nums text-zinc-500">
           {formatMMK(totalForBusiness(bizId))}
         </span>
@@ -199,9 +201,9 @@ export default function NewTransactionPage() {
   function BusinessSelectItemContent({ business }: { business: Business }) {
     const expanded = expandedBusinessIds.has(business.id);
     return (
-      <span className="flex w-full flex-col gap-1.5 py-0.5">
-        <span className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5">
+      <span className="flex w-full min-w-0 flex-col gap-1.5 py-0.5">
+        <span className="flex w-full min-w-0 items-center justify-between gap-2">
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
             {accounts.length > 0 && (
               <button
                 type="button"
@@ -230,7 +232,7 @@ export default function NewTransactionPage() {
                 />
               </button>
             )}
-            <span className="truncate font-medium text-zinc-900">
+            <span className="min-w-0 truncate font-medium text-zinc-900">
               {business.name}
             </span>
           </span>
@@ -239,13 +241,15 @@ export default function NewTransactionPage() {
           </span>
         </span>
         {expanded && accounts.length > 0 && (
-          <span className="space-y-0.5 border-t border-zinc-100 pt-1.5 pl-6">
+          <span className="min-w-0 space-y-0.5 border-t border-zinc-100 pt-1.5 pl-6">
             {accounts.map((a) => (
               <span
                 key={a.id}
-                className="flex items-baseline justify-between gap-3 text-xs text-zinc-500"
+                className="flex min-w-0 items-baseline justify-between gap-3 text-xs text-zinc-500"
               >
-                <span className="truncate">{shortAccountLabel(a)}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {shortAccountLabel(a)}
+                </span>
                 <span className="shrink-0 tabular-nums">
                   {formatMMK(holdingBalanceFor(business.id, a.id))}
                 </span>
@@ -278,7 +282,9 @@ export default function NewTransactionPage() {
     const balance = availableInAccount(bizId, account);
     return (
       <span className="flex w-full min-w-0 items-center justify-between gap-3 pr-1">
-        <span className="truncate">{formatAccountLabel(account)}</span>
+        <span className="min-w-0 flex-1 truncate">
+          {formatAccountLabel(account)}
+        </span>
         <span className="shrink-0 tabular-nums text-zinc-500">
           {formatMMK(balance)}
         </span>
@@ -295,7 +301,7 @@ export default function NewTransactionPage() {
   }) {
     const balance = availableInAccount(bizId, account);
     return (
-      <span className="flex w-full items-baseline justify-between gap-3">
+      <span className="flex w-full min-w-0 items-baseline justify-between gap-3">
         <span className="min-w-0 truncate">{formatAccountLabel(account)}</span>
         <span className="shrink-0 tabular-nums text-zinc-600">
           {formatMMK(balance)}
@@ -311,6 +317,16 @@ export default function NewTransactionPage() {
         ? EXPENSE_CATEGORIES
         : [];
   const makerLabel = userDisplayName(profile);
+  const selectedBusinessName = businesses.find((b) => b.id === businessId)
+    ?.name;
+  const selectedAccount = accounts.find((a) => a.id === accountId);
+  const selectedFromBusinessName = businesses.find(
+    (b) => b.id === fromBusinessId
+  )?.name;
+  const selectedToBusinessName = businesses.find((b) => b.id === toBusinessId)
+    ?.name;
+  const selectedFromAccount = accounts.find((a) => a.id === fromAccountId);
+  const selectedToAccount = accounts.find((a) => a.id === toAccountId);
 
   if (!canCreateTransaction(profile)) {
     return (
@@ -507,7 +523,10 @@ export default function NewTransactionPage() {
                     value={businessId || undefined}
                     onValueChange={setBusinessId}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger
+                      className="min-w-0 overflow-hidden"
+                      title={selectedBusinessName || "Select business"}
+                    >
                       <SelectValue placeholder="Select business">
                         {businessId ? (
                           <BusinessSelectValue bizId={businessId} />
@@ -519,6 +538,7 @@ export default function NewTransactionPage() {
                         <SelectItem
                           key={b.id}
                           value={b.id}
+                          title={b.name}
                           textValue={`${b.name} ${formatMMK(totalForBusiness(b.id))}`}
                           className="items-start py-2"
                         >
@@ -543,7 +563,14 @@ export default function NewTransactionPage() {
                     value={accountId || undefined}
                     onValueChange={setAccountId}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger
+                      className="min-w-0 overflow-hidden"
+                      title={
+                        selectedAccount
+                          ? formatAccountLabel(selectedAccount)
+                          : "Select bank or cash account"
+                      }
+                    >
                       <SelectValue placeholder="Select bank or cash account">
                         {accountId ? (
                           <AccountSelectValue
@@ -558,6 +585,7 @@ export default function NewTransactionPage() {
                         <SelectItem
                           key={a.id}
                           value={a.id}
+                          title={formatAccountLabel(a)}
                           textValue={`${formatAccountLabel(a)} ${formatMMK(
                             availableInAccount(businessId, a)
                           )}`}
@@ -621,7 +649,10 @@ export default function NewTransactionPage() {
                       value={fromBusinessId || undefined}
                       onValueChange={setFromBusinessId}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger
+                        className="min-w-0 overflow-hidden"
+                        title={selectedFromBusinessName || "Source business"}
+                      >
                         <SelectValue placeholder="Source business">
                           {fromBusinessId ? (
                             <BusinessSelectValue bizId={fromBusinessId} />
@@ -633,6 +664,7 @@ export default function NewTransactionPage() {
                           <SelectItem
                             key={b.id}
                             value={b.id}
+                            title={b.name}
                             textValue={`${b.name} ${formatMMK(totalForBusiness(b.id))}`}
                             className="items-start py-2"
                           >
@@ -656,7 +688,12 @@ export default function NewTransactionPage() {
                       value={toBusinessId || undefined}
                       onValueChange={setToBusinessId}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger
+                        className="min-w-0 overflow-hidden"
+                        title={
+                          selectedToBusinessName || "Destination business"
+                        }
+                      >
                         <SelectValue placeholder="Destination business">
                           {toBusinessId ? (
                             <BusinessSelectValue bizId={toBusinessId} />
@@ -668,6 +705,7 @@ export default function NewTransactionPage() {
                           <SelectItem
                             key={b.id}
                             value={b.id}
+                            title={b.name}
                             textValue={`${b.name} ${formatMMK(totalForBusiness(b.id))}`}
                             className="items-start py-2"
                           >
@@ -693,7 +731,14 @@ export default function NewTransactionPage() {
                       value={fromAccountId || undefined}
                       onValueChange={setFromAccountId}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger
+                        className="min-w-0 overflow-hidden"
+                        title={
+                          selectedFromAccount
+                            ? formatAccountLabel(selectedFromAccount)
+                            : "Source account"
+                        }
+                      >
                         <SelectValue placeholder="Source account">
                           {fromAccountId ? (
                             <AccountSelectValue
@@ -708,6 +753,7 @@ export default function NewTransactionPage() {
                           <SelectItem
                             key={a.id}
                             value={a.id}
+                            title={formatAccountLabel(a)}
                             textValue={`${formatAccountLabel(a)} ${formatMMK(
                               availableInAccount(fromBusinessId, a)
                             )}`}
@@ -727,7 +773,14 @@ export default function NewTransactionPage() {
                       value={toAccountId || undefined}
                       onValueChange={setToAccountId}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger
+                        className="min-w-0 overflow-hidden"
+                        title={
+                          selectedToAccount
+                            ? formatAccountLabel(selectedToAccount)
+                            : "Destination account"
+                        }
+                      >
                         <SelectValue placeholder="Destination account">
                           {toAccountId ? (
                             <AccountSelectValue
@@ -742,6 +795,7 @@ export default function NewTransactionPage() {
                           <SelectItem
                             key={a.id}
                             value={a.id}
+                            title={formatAccountLabel(a)}
                             textValue={`${formatAccountLabel(a)} ${formatMMK(
                               availableInAccount(toBusinessId, a)
                             )}`}

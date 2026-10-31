@@ -170,6 +170,7 @@ function PeriodSegment({
   onChange: (period: PeriodKind) => void;
 }) {
   const labels: Record<PeriodKind, string> = {
+    day: "Day",
     month: "Month",
     year: "Year",
     all: "All time",

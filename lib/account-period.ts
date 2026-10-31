@@ -8,7 +8,7 @@ import {
   sumBuckets,
 } from "@/lib/summaries";
 
-export type PeriodKind = "month" | "year" | "all";
+export type PeriodKind = "day" | "month" | "year" | "all";
 /** @deprecated Prefer PeriodKind */
 export type AccountPeriod = PeriodKind;
 
@@ -57,7 +57,8 @@ function lastDayOfMonth(year: number, month: number): number {
 export function getPeriodBounds(
   period: PeriodKind,
   year: number,
-  month: number
+  month: number,
+  day = 1
 ): PeriodBounds {
   if (period === "all") {
     return { start: null, end: null, label: "all time" };
@@ -70,6 +71,16 @@ export function getPeriodBounds(
     };
   }
   const m = pad2(month);
+  if (period === "day") {
+    const maxDay = lastDayOfMonth(year, month);
+    const safeDay = Math.min(Math.max(1, day), maxDay);
+    const key = `${year}-${m}-${pad2(safeDay)}`;
+    return {
+      start: key,
+      end: key,
+      label: `${safeDay} ${MONTH_NAMES[month - 1]} ${year}`,
+    };
+  }
   const last = lastDayOfMonth(year, month);
   return {
     start: `${year}-${m}-01`,
@@ -220,6 +231,7 @@ export function summarizeMonthsInPeriod(
     const prefix = `${year}-`;
     selected = months.filter((m) => m.id.startsWith(prefix));
   } else {
+    // month and day views both use that calendar month's rollup.
     const key = `${year}-${pad2(month)}`;
     selected = months.filter((m) => m.id === key);
   }

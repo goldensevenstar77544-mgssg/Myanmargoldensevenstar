@@ -100,3 +100,36 @@ export function formatTime(
     hour12: true,
   }).format(date);
 }
+
+function toLocalDate(value: Date | string | { toDate: () => Date }): Date {
+  if (typeof value === "string") {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      const [y, m, d] = value.split("-").map(Number);
+      return new Date(y, m - 1, d);
+    }
+    return new Date(value);
+  }
+  if (value instanceof Date) return value;
+  return value.toDate();
+}
+
+/** e.g. 12:00PM */
+export function formatTimeCompact(
+  value: Date | string | { toDate: () => Date }
+): string {
+  const date = toLocalDate(value);
+  const raw = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+  return raw.replace(/\s/g, "").toUpperCase();
+}
+
+/** e.g. 1.2.2026 */
+export function formatDateDots(
+  value: Date | string | { toDate: () => Date }
+): string {
+  const date = toLocalDate(value);
+  return `${date.getDate()}.${date.getMonth() + 1}.${date.getFullYear()}`;
+}

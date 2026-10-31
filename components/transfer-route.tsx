@@ -59,7 +59,7 @@ function transferPlaceLabel(
   return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
-/** Two-line transfer amount: −MMK from Business · Account / +MMK to … */
+/** Transfer amount: −MMK / +MMK (optionally with from/to place labels). */
 export function TransferAmount({
   amount,
   fromBusiness,
@@ -68,6 +68,8 @@ export function TransferAmount({
   toAccount,
   className,
   compact = false,
+  leg = "both",
+  showPlaces = true,
 }: {
   amount: number;
   fromBusiness?: string | null;
@@ -76,9 +78,15 @@ export function TransferAmount({
   toAccount?: string | null;
   className?: string;
   compact?: boolean;
+  /** Which transfer leg to show; default both (− and +). */
+  leg?: "out" | "in" | "both";
+  /** When false, show only ± amounts (no from/to place text). */
+  showPlaces?: boolean;
 }) {
   const from = transferPlaceLabel(fromBusiness, fromAccount);
   const to = transferPlaceLabel(toBusiness, toAccount);
+  const showOut = leg === "out" || leg === "both";
+  const showIn = leg === "in" || leg === "both";
   return (
     <div
       className={cn(
@@ -87,14 +95,22 @@ export function TransferAmount({
         className
       )}
     >
-      <p className="font-semibold text-rose-700">
-        −{formatMMK(amount)}
-        <span className="font-normal text-zinc-500"> from {from}</span>
-      </p>
-      <p className="font-semibold text-emerald-700">
-        +{formatMMK(amount)}
-        <span className="font-normal text-zinc-500"> to {to}</span>
-      </p>
+      {showOut ? (
+        <p className="font-semibold text-rose-700">
+          −{formatMMK(amount)}
+          {showPlaces ? (
+            <span className="font-normal text-zinc-500"> from {from}</span>
+          ) : null}
+        </p>
+      ) : null}
+      {showIn ? (
+        <p className="font-semibold text-emerald-700">
+          +{formatMMK(amount)}
+          {showPlaces ? (
+            <span className="font-normal text-zinc-500"> to {to}</span>
+          ) : null}
+        </p>
+      ) : null}
     </div>
   );
 }

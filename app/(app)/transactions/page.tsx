@@ -1,18 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Info,
+  Landmark,
+  Plus,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/components/auth-provider";
 import { LoadingState } from "@/components/loading-state";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusIcon } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
 } from "@/components/ui/card";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Table,
   TableBody,
@@ -53,17 +71,17 @@ import {
   cn,
   formatCompactMMK,
   formatDate,
+  formatDateDots,
   formatMMK,
   formatAccountLabel,
   formatTime,
+  formatTimeCompact,
 } from "@/lib/utils";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
 import { useMinWidth } from "@/lib/use-min-width";
+import { DatePicker } from "@/components/date-picker";
 import { MobileFab, MobileFabStack } from "@/components/mobile-fab";
-import {
-  TransferAmount,
-  TransferRoute,
-} from "@/components/transfer-route";
+import { TransferAmount } from "@/components/transfer-route";
 
 type AppliedFilters = {
   status: string;
@@ -74,48 +92,283 @@ type AppliedFilters = {
   dateTo: string;
 };
 
-type TransferLegs = {
-  out?: Transaction;
-  inLeg?: Transaction;
-};
+type ListRow =
+  | { kind: "single"; tx: Transaction }
+  | {
+      kind: "transfer";
+      groupId: string;
+      primary: Transaction;
+      out?: Transaction;
+      inLeg?: Transaction;
+      legs: Transaction[];
+    };
 
-function buildTransferLegIndex(items: Transaction[]): {
-  byId: Map<string, Transaction>;
-  byGroupDirection: Map<string, Transaction>;
-} {
-  const byId = new Map(items.map((t) => [t.id, t]));
-  const byGroupDirection = new Map<string, Transaction>();
-  for (const t of items) {
-    if (!t.transferGroupId) continue;
-    byGroupDirection.set(`${t.transferGroupId}:${t.direction}`, t);
+function buildListRows(items: Transaction[]): ListRow[] {
+  const seenGroups = new Set<string>();
+  const rows: ListRow[] = [];
+  for (const tx of items) {
+    if (!tx.transferGroupId) {
+      rows.push({ kind: "single", tx });
+      continue;
+    }
+    if (seenGroups.has(tx.transferGroupId)) continue;
+    seenGroups.add(tx.transferGroupId);
+    const legs = items.filter((t) => t.transferGroupId === tx.transferGroupId);
+    const out = legs.find((t) => t.direction === "expense");
+    const inLeg = legs.find((t) => t.direction === "income");
+    const ordered = [out, inLeg].filter((t): t is Transaction => Boolean(t));
+    rows.push({
+      kind: "transfer",
+      groupId: tx.transferGroupId,
+      primary: out || inLeg || tx,
+      out,
+      inLeg,
+      legs: ordered.length > 0 ? ordered : legs,
+    });
   }
-  return { byId, byGroupDirection };
+  return rows;
 }
 
-function resolveTransferLegs(
-  tx: Transaction,
-  index: ReturnType<typeof buildTransferLegIndex>
-): TransferLegs {
-  const linked = tx.linkedTransactionId
-    ? index.byId.get(tx.linkedTransactionId)
-    : undefined;
-  const out =
-    tx.direction === "expense"
-      ? tx
-      : linked?.direction === "expense"
-        ? linked
-        : tx.transferGroupId
-          ? index.byGroupDirection.get(`${tx.transferGroupId}:expense`)
-          : undefined;
-  const inLeg =
-    tx.direction === "income"
-      ? tx
-      : linked?.direction === "income"
-        ? linked
-        : tx.transferGroupId
-          ? index.byGroupDirection.get(`${tx.transferGroupId}:income`)
-          : undefined;
-  return { out, inLeg };
+function accountNameLabel(account: Account): string {
+  if (account.type === "cash") return account.name;
+  return account.bankName?.trim() || account.name;
+}
+
+function accountDetailLines(account: Account): string[] {
+  if (account.type === "cash") return ["Cash in hand"];
+  return [account.accountNumber, account.bankBranch]
+    .map((v) => v?.trim())
+    .filter((v): v is string => Boolean(v));
+}
+
+function DateTimeCell({
+  date,
+  time,
+}: {
+  date: Date | string | { toDate: () => Date };
+  time: Date | string | { toDate: () => Date };
+}) {
+  return (
+    <div className="space-y-0.5 leading-snug">
+      <p className="text-sm font-semibold tabular-nums text-zinc-950">
+        {formatTimeCompact(time)}
+      </p>
+      <p className="text-xs tabular-nums text-zinc-500">
+        {formatDateDots(date)}
+      </p>
+    </div>
+  );
+}
+
+function AccountWithDetails({
+  name,
+  details,
+  muted,
+  compact,
+  className,
+}: {
+  name?: string;
+  details?: string[];
+  muted?: boolean;
+  compact?: boolean;
+  className?: string;
+}) {
+  const label = name?.trim() || "—";
+  const lines = details?.filter(Boolean) ?? [];
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Account details: ${label}`}
+          className={cn(
+            "inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-zinc-100",
+            compact ? "text-xs" : "text-sm",
+            muted ? "text-zinc-400 hover:bg-zinc-100/70" : "text-zinc-950",
+            className
+          )}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span
+            className={cn(
+              "min-w-0 truncate",
+              !muted && "font-medium"
+            )}
+          >
+            {label}
+          </span>
+          <Info
+            className={cn(
+              "h-3.5 w-3.5 shrink-0",
+              muted ? "text-zinc-400" : "text-zinc-500"
+            )}
+            aria-hidden
+          />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        side="bottom"
+        className="w-56 px-3 py-2.5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="space-y-2">
+          <div className="flex items-start gap-2">
+            <Landmark
+              className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500"
+              aria-hidden
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Account
+              </p>
+              <p className="truncate text-sm font-semibold text-zinc-950">
+                {label}
+              </p>
+            </div>
+          </div>
+          {lines.length > 0 ? (
+            <div className="space-y-1 border-t border-zinc-100 pt-2">
+              {lines.map((line, index) => (
+                <p
+                  key={`${index}-${line}`}
+                  className="truncate text-xs text-zinc-600"
+                >
+                  {line}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="border-t border-zinc-100 pt-2 text-xs text-zinc-500">
+              No further details
+            </p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function StackedFromTo({
+  from,
+  to,
+  transfer,
+  highlight,
+}: {
+  from?: string;
+  to?: string;
+  transfer: boolean;
+  /** Emphasize the active transfer leg (from for out, to for in). */
+  highlight?: "from" | "to";
+}) {
+  if (!transfer) {
+    return <span className="block max-w-[12rem] truncate">{from || "—"}</span>;
+  }
+  const fromActive = highlight === "from";
+  const toActive = highlight === "to";
+  return (
+    <div className="space-y-0.5 text-xs leading-snug">
+      <p
+        className={cn(
+          "max-w-[12rem] truncate",
+          fromActive ? "font-medium text-zinc-950" : "text-zinc-400"
+        )}
+      >
+        <span
+          className={cn(
+            "font-medium",
+            fromActive ? "text-zinc-600" : "text-zinc-400"
+          )}
+        >
+          From{" "}
+        </span>
+        {from || "—"}
+      </p>
+      <p
+        className={cn(
+          "max-w-[12rem] truncate",
+          toActive ? "font-medium text-zinc-950" : "text-zinc-400"
+        )}
+      >
+        <span
+          className={cn(
+            "font-medium",
+            toActive ? "text-zinc-600" : "text-zinc-400"
+          )}
+        >
+          To{" "}
+        </span>
+        {to || "—"}
+      </p>
+    </div>
+  );
+}
+
+function StackedAccounts({
+  fromName,
+  fromDetails,
+  toName,
+  toDetails,
+  transfer,
+  highlight,
+}: {
+  fromName?: string;
+  fromDetails?: string[];
+  toName?: string;
+  toDetails?: string[];
+  transfer: boolean;
+  highlight?: "from" | "to";
+}) {
+  if (!transfer) {
+    return (
+      <AccountWithDetails
+        name={fromName}
+        details={fromDetails}
+        compact
+      />
+    );
+  }
+  const fromActive = !highlight || highlight === "from";
+  const toActive = !highlight || highlight === "to";
+  // When highlight is set, mute the inactive leg; when unset (group summary), both active.
+  const fromMuted = Boolean(highlight) && !fromActive;
+  const toMuted = Boolean(highlight) && !toActive;
+  return (
+    <div className="space-y-1 text-xs leading-snug">
+      <div className="flex min-w-0 items-center gap-1">
+        <span
+          className={cn(
+            "shrink-0 font-medium",
+            fromMuted ? "text-zinc-400" : "text-zinc-600"
+          )}
+        >
+          From
+        </span>
+        <AccountWithDetails
+          compact
+          muted={fromMuted}
+          name={fromName}
+          details={fromDetails}
+        />
+      </div>
+      <div className="flex min-w-0 items-center gap-1">
+        <span
+          className={cn(
+            "shrink-0 font-medium",
+            toMuted ? "text-zinc-400" : "text-zinc-600"
+          )}
+        >
+          To
+        </span>
+        <AccountWithDetails
+          compact
+          muted={toMuted}
+          name={toName}
+          details={toDetails}
+        />
+      </div>
+    </div>
+  );
 }
 
 const MONTH_OPTIONS = [
@@ -143,13 +396,18 @@ const EMPTY_SUMMARY: TransactionsSummary = {
 function datesFromPeriod(
   period: PeriodKind,
   year: number,
-  month: number
+  month: number,
+  day = 1
 ): Pick<AppliedFilters, "dateFrom" | "dateTo"> {
-  const bounds = getPeriodBounds(period, year, month);
+  const bounds = getPeriodBounds(period, year, month, day);
   return {
     dateFrom: bounds.start ?? "",
     dateTo: bounds.end ?? "",
   };
+}
+
+function toDateKey(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function PeriodSegment({
@@ -162,6 +420,7 @@ function PeriodSegment({
   onChange: (period: PeriodKind) => void;
 }) {
   const labels: Record<PeriodKind, string> = {
+    day: "Day",
     month: "Month",
     year: "Year",
     all: "All time",
@@ -236,6 +495,7 @@ export default function TransactionsPage() {
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
+  const currentDay = now.getDate();
 
   const [items, setItems] = useState<Transaction[]>([]);
   const [businesses, setBusinesses] = useState<Business[]>([]);
@@ -245,9 +505,10 @@ export default function TransactionsPage() {
   const [cursor, setCursor] = useState<PageCursor | null>(null);
   const [hasMore, setHasMore] = useState(false);
 
-  const [period, setPeriod] = useState<PeriodKind>("month");
+  const [period, setPeriod] = useState<PeriodKind>("day");
   const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState(currentMonth);
+  const [day, setDay] = useState(currentDay);
 
   const [status, setStatus] = useState("all");
   const [direction, setDirection] = useState("all");
@@ -258,35 +519,40 @@ export default function TransactionsPage() {
     direction: "all",
     businessId: "all",
     accountId: "all",
-    ...datesFromPeriod("month", currentYear, currentMonth),
+    ...datesFromPeriod("day", currentYear, currentMonth, currentDay),
   }));
   const [summary, setSummary] = useState<TransactionsSummary>(EMPTY_SUMMARY);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  const [expandedTransfers, setExpandedTransfers] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const businessMap = useMemo(
     () => Object.fromEntries(businesses.map((b) => [b.id, b.name])),
     [businesses]
   );
-  const accountMap = useMemo(
+  const accountNameMap = useMemo(
     () =>
-      Object.fromEntries(
-        accounts.map((a) => [a.id, formatAccountLabel(a)])
-      ),
+      Object.fromEntries(accounts.map((a) => [a.id, accountNameLabel(a)])),
     [accounts]
   );
-  const shortAccountMap = useMemo(
+  const accountDetailMap = useMemo(
     () =>
-      Object.fromEntries(
-        accounts.map((a) => [
-          a.id,
-          a.type === "cash" ? a.name : a.bankName?.trim() || a.name,
-        ])
-      ),
+      Object.fromEntries(accounts.map((a) => [a.id, accountDetailLines(a)])),
     [accounts]
   );
 
-  const transferIndex = useMemo(() => buildTransferLegIndex(items), [items]);
+  const listRows = useMemo(() => buildListRows(items), [items]);
   const { matches: isDesktop, ready: layoutReady } = useMinWidth(768);
+
+  function toggleTransferExpanded(groupId: string) {
+    setExpandedTransfers((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }
 
   const listFiltersFromApplied = useCallback(
     (filters: AppliedFilters) => {
@@ -390,56 +656,86 @@ export default function TransactionsPage() {
   const netTone =
     summary.net > 0 ? "income" : summary.net < 0 ? "expense" : "neutral";
 
+  const canGoNextDay =
+    year < currentYear ||
+    (year === currentYear && month < currentMonth) ||
+    (year === currentYear && month === currentMonth && day < currentDay);
   const canGoNextMonth =
     year < currentYear || (year === currentYear && month < currentMonth);
   const canGoNextYear = year < currentYear;
+  const isCurrentDay =
+    year === currentYear && month === currentMonth && day === currentDay;
   const isCurrentMonth = year === currentYear && month === currentMonth;
   const isCurrentYear = year === currentYear;
+
+  function shiftDay(delta: number) {
+    const date = new Date(year, month - 1, day + delta);
+    setYear(date.getFullYear());
+    setMonth(date.getMonth() + 1);
+    setDay(date.getDate());
+  }
 
   function shiftMonth(delta: number) {
     const date = new Date(year, month - 1 + delta, 1);
     setYear(date.getFullYear());
     setMonth(date.getMonth() + 1);
+    setDay(1);
   }
 
   function goToCurrentPeriod() {
     setYear(currentYear);
     setMonth(currentMonth);
+    setDay(currentDay);
   }
+
+  function setSelectedDay(dateKey: string) {
+    const [y, m, d] = dateKey.split("-").map(Number);
+    if (!y || !m || !d) return;
+    setYear(y);
+    setMonth(m);
+    setDay(d);
+  }
+
+  // Keep day within the selected month (e.g. 31 → 28 in February).
+  useEffect(() => {
+    const maxDay = new Date(year, month, 0).getDate();
+    if (day > maxDay) setDay(maxDay);
+  }, [year, month, day]);
 
   // Period controls apply immediately (like business detail).
   useEffect(() => {
-    const dates = datesFromPeriod(period, year, month);
+    const dates = datesFromPeriod(period, year, month, day);
     setApplied((prev) => {
       if (prev.dateFrom === dates.dateFrom && prev.dateTo === dates.dateTo) {
         return prev;
       }
       return { ...prev, ...dates };
     });
-  }, [period, year, month]);
+  }, [period, year, month, day]);
 
   const hasActiveFilters =
     status !== "all" ||
     direction !== "all" ||
     businessId !== "all" ||
     accountId !== "all" ||
-    period !== "month" ||
-    !isCurrentMonth;
+    period !== "day" ||
+    !isCurrentDay;
 
   function clearFilters() {
     setStatus("all");
     setDirection("all");
     setBusinessId("all");
     setAccountId("all");
-    setPeriod("month");
+    setPeriod("day");
     setYear(currentYear);
     setMonth(currentMonth);
+    setDay(currentDay);
     setApplied({
       status: "all",
       direction: "all",
       businessId: "all",
       accountId: "all",
-      ...datesFromPeriod("month", currentYear, currentMonth),
+      ...datesFromPeriod("day", currentYear, currentMonth, currentDay),
     });
   }
 
@@ -454,7 +750,7 @@ export default function TransactionsPage() {
     setApplied((prev) => ({
       ...prev,
       [field]: value,
-      ...datesFromPeriod(period, year, month),
+      ...datesFromPeriod(period, year, month, day),
     }));
   }
 
@@ -519,10 +815,53 @@ export default function TransactionsPage() {
 
       <div className="flex flex-col gap-2">
         <div className="flex w-full rounded-lg bg-zinc-100 p-0.5">
+          <PeriodSegment value="day" period={period} onChange={setPeriod} />
           <PeriodSegment value="month" period={period} onChange={setPeriod} />
           <PeriodSegment value="year" period={period} onChange={setPeriod} />
           <PeriodSegment value="all" period={period} onChange={setPeriod} />
         </div>
+
+        {period === "day" && (
+          <div className="flex flex-wrap items-center justify-between gap-1.5 sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              aria-label="Previous day"
+              onClick={() => shiftDay(-1)}
+            >
+              <ChevronLeft />
+            </Button>
+            <DatePicker
+              value={toDateKey(year, month, day)}
+              onChange={setSelectedDay}
+              toYear={currentYear}
+              className="h-9 min-w-0 flex-1 px-2.5 text-xs sm:w-[11rem] sm:flex-none sm:text-sm"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              aria-label="Next day"
+              disabled={!canGoNextDay}
+              onClick={() => shiftDay(1)}
+            >
+              <ChevronRight />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 shrink-0"
+              disabled={isCurrentDay}
+              onClick={goToCurrentPeriod}
+            >
+              Today
+            </Button>
+          </div>
+        )}
 
         {period === "month" && (
           <div className="flex flex-wrap items-center justify-between gap-1.5 sm:justify-end">
@@ -638,15 +977,15 @@ export default function TransactionsPage() {
                 ? "All businesses"
                 : businesses.find((b) => b.id === businessId)?.name || "Business"
             }
-            className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[11rem] sm:text-sm"
+            className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[11rem] sm:text-sm [&>span]:truncate"
           >
             <SelectValue placeholder="Business" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All businesses</SelectItem>
             {businesses.map((b) => (
-              <SelectItem key={b.id} value={b.id}>
-                {b.name}
+              <SelectItem key={b.id} value={b.id} title={b.name}>
+                <span className="block truncate">{b.name}</span>
               </SelectItem>
             ))}
           </SelectContent>
@@ -667,17 +1006,42 @@ export default function TransactionsPage() {
                       : "Account";
                   })()
             }
-            className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[11rem] sm:text-sm"
+            className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[14rem] sm:text-sm [&>span]:truncate"
           >
-            <SelectValue placeholder="Account" />
+            <SelectValue placeholder="Account">
+              {accountId === "all"
+                ? "All accounts"
+                : (() => {
+                    const account = accounts.find((a) => a.id === accountId);
+                    return account ? accountNameLabel(account) : "Account";
+                  })()}
+            </SelectValue>
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-w-[min(22rem,calc(100vw-1.5rem))]">
             <SelectItem value="all">All accounts</SelectItem>
-            {accounts.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                {formatAccountLabel(a)}
-              </SelectItem>
-            ))}
+            {accounts.map((a) => {
+              const fullLabel = formatAccountLabel(a);
+              const details = accountDetailLines(a);
+              return (
+                <SelectItem
+                  key={a.id}
+                  value={a.id}
+                  title={fullLabel}
+                  className="items-start py-2"
+                >
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="truncate font-medium">
+                      {accountNameLabel(a)}
+                    </span>
+                    {details.length > 0 ? (
+                      <span className="truncate text-xs text-zinc-500">
+                        {details.join(" · ")}
+                      </span>
+                    ) : null}
+                  </span>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
         <Select
@@ -686,7 +1050,7 @@ export default function TransactionsPage() {
         >
           <SelectTrigger
             aria-label="Status"
-            className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[9rem] sm:text-sm"
+            className="h-9 min-w-0 w-full px-2.5 text-xs sm:w-[9rem] sm:text-sm [&>span]:truncate"
           >
             <SelectValue placeholder="Status" />
           </SelectTrigger>
@@ -744,7 +1108,8 @@ export default function TransactionsPage() {
                       <TableHead className="w-10">#</TableHead>
                       <TableHead>ID</TableHead>
                       <TableHead>Date</TableHead>
-                      <TableHead>From / To</TableHead>
+                      <TableHead>Business</TableHead>
+                      <TableHead>Account</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead>Description</TableHead>
                       <TableHead>Amount</TableHead>
@@ -754,103 +1119,49 @@ export default function TransactionsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {items.map((tx, index) => {
-                      const { out, inLeg } = resolveTransferLegs(
-                        tx,
-                        transferIndex
-                      );
-                      return (
-                        <TableRow
-                          key={tx.id}
-                          className="cursor-pointer"
-                          onClick={() => router.push(`/transactions/${tx.id}`)}
-                        >
-                          <TableCell className="tabular-nums text-zinc-500">
-                            {index + 1}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">
-                            {tx.displayId}
-                          </TableCell>
-                          <TableCell>
-                            <div className="space-y-0.5 leading-snug">
-                              <p>{formatDate(tx.date)}</p>
-                              <p className="text-xs text-zinc-500">
-                                {formatTime(tx.createdAt)}
-                              </p>
-                            </div>
-                          </TableCell>
-                          <TableCell className="max-w-[16rem]">
-                            {tx.transferGroupId ? (
-                              <TransferRoute
-                                compact
-                                fromBusiness={
-                                  out?.businessId
-                                    ? businessMap[out.businessId]
-                                    : undefined
-                                }
-                                fromAccount={
-                                  out?.accountId
-                                    ? accountMap[out.accountId]
-                                    : undefined
-                                }
-                                toBusiness={
-                                  inLeg?.businessId
-                                    ? businessMap[inLeg.businessId]
-                                    : undefined
-                                }
-                                toAccount={
-                                  inLeg?.accountId
-                                    ? accountMap[inLeg.accountId]
-                                    : undefined
-                                }
+                    {listRows.map((row, index) => {
+                      if (row.kind === "single") {
+                        const tx = row.tx;
+                        return (
+                          <TableRow
+                            key={tx.id}
+                            className="cursor-pointer"
+                            onClick={() =>
+                              router.push(`/transactions/${tx.id}`)
+                            }
+                          >
+                            <TableCell className="tabular-nums text-zinc-500">
+                              {index + 1}
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {tx.displayId}
+                            </TableCell>
+                            <TableCell>
+                              <DateTimeCell
+                                date={tx.date}
+                                time={tx.createdAt}
                               />
-                            ) : (
-                              <div className="space-y-0.5 text-xs leading-snug">
-                                <p className="truncate">
-                                  {businessMap[tx.businessId] || "—"}
-                                </p>
-                                <p className="truncate text-zinc-500">
-                                  {accountMap[tx.accountId] || "—"}
-                                </p>
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {tx.transferGroupId
-                              ? "Transfer"
-                              : tx.direction === "income"
-                                ? "In"
-                                : "Out"}
-                          </TableCell>
-                          <TableCell className="max-w-[14rem] truncate text-zinc-500">
-                            {tx.description?.trim() || "—"}
-                          </TableCell>
-                          <TableCell>
-                            {tx.transferGroupId ? (
-                              <TransferAmount
-                                amount={tx.amount}
-                                fromBusiness={
-                                  out?.businessId
-                                    ? businessMap[out.businessId]
-                                    : undefined
-                                }
-                                fromAccount={
-                                  out?.accountId
-                                    ? shortAccountMap[out.accountId]
-                                    : undefined
-                                }
-                                toBusiness={
-                                  inLeg?.businessId
-                                    ? businessMap[inLeg.businessId]
-                                    : undefined
-                                }
-                                toAccount={
-                                  inLeg?.accountId
-                                    ? shortAccountMap[inLeg.accountId]
-                                    : undefined
-                                }
+                            </TableCell>
+                            <TableCell>
+                              <StackedFromTo
+                                transfer={false}
+                                from={businessMap[tx.businessId]}
                               />
-                            ) : (
+                            </TableCell>
+                            <TableCell>
+                              <StackedAccounts
+                                transfer={false}
+                                fromName={accountNameMap[tx.accountId]}
+                                fromDetails={accountDetailMap[tx.accountId]}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              {tx.direction === "income" ? "In" : "Out"}
+                            </TableCell>
+                            <TableCell className="max-w-[14rem] truncate text-zinc-500">
+                              {tx.description?.trim() || "—"}
+                            </TableCell>
+                            <TableCell>
                               <span
                                 className={
                                   tx.direction === "income"
@@ -861,123 +1172,301 @@ export default function TransactionsPage() {
                                 {tx.direction === "income" ? "+" : "−"}
                                 {formatMMK(tx.amount)}
                               </span>
+                            </TableCell>
+                            <TableCell>
+                              <StatusIcon status={tx.status} />
+                            </TableCell>
+                            <TableCell className="max-w-[9rem] truncate">
+                              {tx.makerName || "—"}
+                            </TableCell>
+                            <TableCell className="max-w-[9rem] truncate">
+                              {transactionApproverName(tx) || "—"}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      }
+
+                      const { groupId, primary, out, inLeg, legs } = row;
+                      const expanded = expandedTransfers.has(groupId);
+                      const canExpand = legs.length > 1;
+                      return (
+                        <Fragment key={groupId}>
+                          <TableRow
+                            className={cn(
+                              "cursor-pointer",
+                              expanded
+                                ? "border-l-2 border-l-sky-500 bg-sky-50 hover:bg-sky-50/90"
+                                : "hover:bg-zinc-50"
                             )}
-                          </TableCell>
-                          <TableCell>
-                            <StatusBadge status={tx.status} />
-                          </TableCell>
-                          <TableCell className="max-w-[9rem] truncate">
-                            {tx.makerName || "—"}
-                          </TableCell>
-                          <TableCell className="max-w-[9rem] truncate">
-                            {transactionApproverName(tx) || "—"}
-                          </TableCell>
-                        </TableRow>
+                            onClick={() =>
+                              router.push(`/transactions/${primary.id}`)
+                            }
+                          >
+                            <TableCell className="tabular-nums text-zinc-500">
+                              <div className="flex items-center gap-1">
+                                {canExpand ? (
+                                  <button
+                                    type="button"
+                                    aria-expanded={expanded}
+                                    aria-label={
+                                      expanded
+                                        ? "Collapse transfer legs"
+                                        : "Expand transfer legs"
+                                    }
+                                    className="inline-flex h-6 w-6 items-center justify-center rounded text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleTransferExpanded(groupId);
+                                    }}
+                                  >
+                                    <ChevronDown
+                                      className={cn(
+                                        "h-4 w-4 transition-transform",
+                                        expanded ? "rotate-0" : "-rotate-90"
+                                      )}
+                                    />
+                                  </button>
+                                ) : (
+                                  <span className="inline-block w-6" />
+                                )}
+                                <span>{index + 1}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              <div className="space-y-0.5">
+                                {legs.map((leg) => (
+                                  <p key={leg.id} className="truncate">
+                                    {leg.displayId}
+                                  </p>
+                                ))}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <DateTimeCell
+                                date={primary.date}
+                                time={primary.createdAt}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <StackedFromTo
+                                transfer
+                                from={
+                                  out?.businessId
+                                    ? businessMap[out.businessId]
+                                    : undefined
+                                }
+                                to={
+                                  inLeg?.businessId
+                                    ? businessMap[inLeg.businessId]
+                                    : undefined
+                                }
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <StackedAccounts
+                                transfer
+                                fromName={
+                                  out?.accountId
+                                    ? accountNameMap[out.accountId]
+                                    : undefined
+                                }
+                                fromDetails={
+                                  out?.accountId
+                                    ? accountDetailMap[out.accountId]
+                                    : undefined
+                                }
+                                toName={
+                                  inLeg?.accountId
+                                    ? accountNameMap[inLeg.accountId]
+                                    : undefined
+                                }
+                                toDetails={
+                                  inLeg?.accountId
+                                    ? accountDetailMap[inLeg.accountId]
+                                    : undefined
+                                }
+                              />
+                            </TableCell>
+                            <TableCell>Transfer</TableCell>
+                            <TableCell className="max-w-[14rem] truncate text-zinc-500">
+                              {primary.description?.trim() || "—"}
+                            </TableCell>
+                            <TableCell>
+                              <TransferAmount
+                                amount={primary.amount}
+                                showPlaces={false}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <StatusIcon status={primary.status} />
+                            </TableCell>
+                            <TableCell className="max-w-[9rem] truncate">
+                              {primary.makerName || "—"}
+                            </TableCell>
+                            <TableCell className="max-w-[9rem] truncate">
+                              {transactionApproverName(primary) || "—"}
+                            </TableCell>
+                          </TableRow>
+                          {expanded
+                            ? legs.map((tx) => {
+                                const highlight =
+                                  tx.direction === "income" ? "to" : "from";
+                                return (
+                                  <TableRow
+                                    key={`${groupId}:${tx.id}`}
+                                    className="cursor-pointer border-l-2 border-l-sky-300 bg-sky-100/70 hover:bg-sky-100"
+                                    onClick={() =>
+                                      router.push(`/transactions/${tx.id}`)
+                                    }
+                                  >
+                                    <TableCell className="text-zinc-400">
+                                      <div className="flex items-center gap-1 pl-1">
+                                        <span className="inline-block w-6" />
+                                        <span className="text-xs">↳</span>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs">
+                                      {tx.displayId}
+                                    </TableCell>
+                                    <TableCell>
+                                      <DateTimeCell
+                                        date={tx.date}
+                                        time={tx.createdAt}
+                                      />
+                                    </TableCell>
+                                    <TableCell>
+                                      <StackedFromTo
+                                        transfer
+                                        highlight={highlight}
+                                        from={
+                                          out?.businessId
+                                            ? businessMap[out.businessId]
+                                            : undefined
+                                        }
+                                        to={
+                                          inLeg?.businessId
+                                            ? businessMap[inLeg.businessId]
+                                            : undefined
+                                        }
+                                      />
+                                    </TableCell>
+                                    <TableCell>
+                                      <StackedAccounts
+                                        transfer
+                                        highlight={highlight}
+                                        fromName={
+                                          out?.accountId
+                                            ? accountNameMap[out.accountId]
+                                            : undefined
+                                        }
+                                        fromDetails={
+                                          out?.accountId
+                                            ? accountDetailMap[out.accountId]
+                                            : undefined
+                                        }
+                                        toName={
+                                          inLeg?.accountId
+                                            ? accountNameMap[inLeg.accountId]
+                                            : undefined
+                                        }
+                                        toDetails={
+                                          inLeg?.accountId
+                                            ? accountDetailMap[inLeg.accountId]
+                                            : undefined
+                                        }
+                                      />
+                                    </TableCell>
+                                    <TableCell>
+                                      {tx.direction === "income"
+                                        ? "In"
+                                        : "Out"}
+                                    </TableCell>
+                                    <TableCell className="max-w-[14rem] truncate text-zinc-500">
+                                      {tx.description?.trim() || "—"}
+                                    </TableCell>
+                                    <TableCell>
+                                      <TransferAmount
+                                        amount={tx.amount}
+                                        showPlaces={false}
+                                        leg={
+                                          tx.direction === "income"
+                                            ? "in"
+                                            : "out"
+                                        }
+                                      />
+                                    </TableCell>
+                                    <TableCell>
+                                      <StatusIcon status={tx.status} />
+                                    </TableCell>
+                                    <TableCell className="max-w-[9rem] truncate">
+                                      {tx.makerName || "—"}
+                                    </TableCell>
+                                    <TableCell className="max-w-[9rem] truncate">
+                                      {transactionApproverName(tx) || "—"}
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })
+                            : null}
+                        </Fragment>
                       );
                     })}
                   </TableBody>
                 </Table>
               ) : (
                 <div className="divide-y divide-zinc-100">
-                  {items.map((tx) => {
-                    const { out, inLeg } = resolveTransferLegs(tx, transferIndex);
-                    const typeLabel = tx.transferGroupId
-                      ? "Transfer"
-                      : tx.direction === "income"
-                        ? "In"
-                        : "Out";
-                    return (
-                      <Link
-                        key={tx.id}
-                        href={`/transactions/${tx.id}`}
-                        className="block space-y-2 px-4 py-3 transition-colors hover:bg-zinc-50 active:bg-zinc-100"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate font-mono text-xs text-zinc-500">
-                              {tx.displayId}
-                            </p>
-                            {tx.transferGroupId ? (
+                  {listRows.map((row) => {
+                    if (row.kind === "single") {
+                      const tx = row.tx;
+                      return (
+                        <div
+                          key={tx.id}
+                          role="link"
+                          tabIndex={0}
+                          className="block cursor-pointer space-y-2 px-4 py-3 transition-colors hover:bg-zinc-50 active:bg-zinc-100"
+                          onClick={() =>
+                            router.push(`/transactions/${tx.id}`)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              router.push(`/transactions/${tx.id}`);
+                            }
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-mono text-xs text-zinc-500">
+                                {tx.displayId}
+                              </p>
                               <div className="mt-0.5">
-                                <TransferRoute
-                                  compact
-                                  fromBusiness={
-                                    out?.businessId
-                                      ? businessMap[out.businessId]
-                                      : undefined
-                                  }
-                                  fromAccount={
-                                    out?.accountId
-                                      ? accountMap[out.accountId]
-                                      : undefined
-                                  }
-                                  toBusiness={
-                                    inLeg?.businessId
-                                      ? businessMap[inLeg.businessId]
-                                      : undefined
-                                  }
-                                  toAccount={
-                                    inLeg?.accountId
-                                      ? accountMap[inLeg.accountId]
-                                      : undefined
-                                  }
+                                <AccountWithDetails
+                                  name={accountNameMap[tx.accountId]}
+                                  details={accountDetailMap[tx.accountId]}
                                 />
                               </div>
-                            ) : (
-                              <>
-                                <p className="truncate text-sm font-medium text-zinc-950">
-                                  {businessMap[tx.businessId] || "—"}
-                                </p>
-                                <p className="truncate text-xs text-zinc-500">
-                                  {accountMap[tx.accountId] || "—"}
-                                </p>
-                              </>
-                            )}
-                            <p className="truncate text-xs text-zinc-500">
-                              {formatDate(tx.date)} · {typeLabel}
-                            </p>
-                            <p className="truncate text-xs text-zinc-500">
-                              {formatTime(tx.createdAt)}
-                            </p>
-                            {tx.description?.trim() ? (
                               <p className="truncate text-xs text-zinc-500">
-                                {tx.description.trim()}
+                                {businessMap[tx.businessId] || "—"}
                               </p>
-                            ) : null}
+                              <p className="truncate text-xs text-zinc-500">
+                                {formatDate(tx.date)} ·{" "}
+                                {tx.direction === "income" ? "In" : "Out"}
+                              </p>
+                              <p className="truncate text-xs text-zinc-500">
+                                {formatTime(tx.createdAt)}
+                              </p>
+                              {tx.description?.trim() ? (
+                                <p className="truncate text-xs text-zinc-500">
+                                  {tx.description.trim()}
+                                </p>
+                              ) : null}
+                            </div>
+                            <StatusIcon status={tx.status} />
                           </div>
-                          <StatusBadge status={tx.status} />
-                        </div>
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="truncate text-xs text-zinc-500">
-                            {tx.makerName || "—"}
-                          </span>
-                          {tx.transferGroupId ? (
-                            <TransferAmount
-                              compact
-                              className="text-right"
-                              amount={tx.amount}
-                              fromBusiness={
-                                out?.businessId
-                                  ? businessMap[out.businessId]
-                                  : undefined
-                              }
-                              fromAccount={
-                                out?.accountId
-                                  ? shortAccountMap[out.accountId]
-                                  : undefined
-                              }
-                              toBusiness={
-                                inLeg?.businessId
-                                  ? businessMap[inLeg.businessId]
-                                  : undefined
-                              }
-                              toAccount={
-                                inLeg?.accountId
-                                  ? shortAccountMap[inLeg.accountId]
-                                  : undefined
-                              }
-                            />
-                          ) : (
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="truncate text-xs text-zinc-500">
+                              {tx.makerName || "—"}
+                            </span>
                             <span
                               className={
                                 tx.direction === "income"
@@ -988,9 +1477,201 @@ export default function TransactionsPage() {
                               {tx.direction === "income" ? "+" : "−"}
                               {formatMMK(tx.amount)}
                             </span>
-                          )}
+                          </div>
                         </div>
-                      </Link>
+                      );
+                    }
+
+                    const { groupId, primary, out, inLeg, legs } = row;
+                    const expanded = expandedTransfers.has(groupId);
+                    const canExpand = legs.length > 1;
+                    return (
+                      <div
+                        key={groupId}
+                        className={cn(
+                          expanded &&
+                            "border-l-2 border-l-sky-500 bg-sky-50"
+                        )}
+                      >
+                        <div
+                          role="link"
+                          tabIndex={0}
+                          className="cursor-pointer space-y-2 px-4 py-3 transition-colors hover:bg-zinc-50 active:bg-zinc-100"
+                          onClick={() =>
+                            router.push(`/transactions/${primary.id}`)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              router.push(`/transactions/${primary.id}`);
+                            }
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 flex-1 items-start gap-1.5">
+                              {canExpand ? (
+                                <button
+                                  type="button"
+                                  aria-expanded={expanded}
+                                  aria-label={
+                                    expanded
+                                      ? "Collapse transfer legs"
+                                      : "Expand transfer legs"
+                                  }
+                                  className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-200"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleTransferExpanded(groupId);
+                                  }}
+                                >
+                                  <ChevronDown
+                                    className={cn(
+                                      "h-4 w-4 transition-transform",
+                                      expanded ? "rotate-0" : "-rotate-90"
+                                    )}
+                                  />
+                                </button>
+                              ) : null}
+                              <div className="min-w-0 flex-1 text-left">
+                                <p className="truncate font-mono text-xs text-zinc-500">
+                                  {legs.map((leg) => leg.displayId).join(" · ")}
+                                </p>
+                                <div className="mt-0.5 space-y-1.5 text-xs leading-snug">
+                                  <div className="min-w-0 space-y-0.5">
+                                    <div className="flex min-w-0 items-center gap-1">
+                                      <span className="shrink-0 font-medium text-zinc-600">
+                                        From
+                                      </span>
+                                      <AccountWithDetails
+                                        compact
+                                        name={
+                                          out?.accountId
+                                            ? accountNameMap[out.accountId]
+                                            : undefined
+                                        }
+                                        details={
+                                          out?.accountId
+                                            ? accountDetailMap[out.accountId]
+                                            : undefined
+                                        }
+                                      />
+                                    </div>
+                                    <p className="truncate text-zinc-500">
+                                      {(out?.businessId &&
+                                        businessMap[out.businessId]) ||
+                                        "—"}
+                                    </p>
+                                  </div>
+                                  <div className="min-w-0 space-y-0.5">
+                                    <div className="flex min-w-0 items-center gap-1">
+                                      <span className="shrink-0 font-medium text-zinc-600">
+                                        To
+                                      </span>
+                                      <AccountWithDetails
+                                        compact
+                                        name={
+                                          inLeg?.accountId
+                                            ? accountNameMap[inLeg.accountId]
+                                            : undefined
+                                        }
+                                        details={
+                                          inLeg?.accountId
+                                            ? accountDetailMap[inLeg.accountId]
+                                            : undefined
+                                        }
+                                      />
+                                    </div>
+                                    <p className="truncate text-zinc-500">
+                                      {(inLeg?.businessId &&
+                                        businessMap[inLeg.businessId]) ||
+                                        "—"}
+                                    </p>
+                                  </div>
+                                </div>
+                                <p className="truncate text-xs text-zinc-500">
+                                  {formatDate(primary.date)} · Transfer
+                                </p>
+                                <p className="truncate text-xs text-zinc-500">
+                                  {formatTime(primary.createdAt)}
+                                </p>
+                                {primary.description?.trim() ? (
+                                  <p className="truncate text-xs text-zinc-500">
+                                    {primary.description.trim()}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </div>
+                            <StatusIcon status={primary.status} />
+                          </div>
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="truncate text-xs text-zinc-500">
+                              {primary.makerName || "—"}
+                            </span>
+                            <TransferAmount
+                              compact
+                              className="text-right"
+                              amount={primary.amount}
+                              showPlaces={false}
+                            />
+                          </div>
+                        </div>
+                        {expanded
+                          ? legs.map((tx) => (
+                              <div
+                                key={`${groupId}:${tx.id}`}
+                                role="link"
+                                tabIndex={0}
+                                className="block cursor-pointer space-y-2 border-t border-sky-100 bg-sky-100/70 px-4 py-3 pl-10 transition-colors hover:bg-sky-100 active:bg-sky-100"
+                                onClick={() =>
+                                  router.push(`/transactions/${tx.id}`)
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    router.push(`/transactions/${tx.id}`);
+                                  }
+                                }}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="truncate font-mono text-xs text-zinc-500">
+                                      {tx.displayId} ·{" "}
+                                      {tx.direction === "income"
+                                        ? "In"
+                                        : "Out"}
+                                    </p>
+                                    <div className="mt-0.5">
+                                      <AccountWithDetails
+                                        name={accountNameMap[tx.accountId]}
+                                        details={
+                                          accountDetailMap[tx.accountId]
+                                        }
+                                      />
+                                    </div>
+                                    <p className="truncate text-xs text-zinc-500">
+                                      {businessMap[tx.businessId] || "—"}
+                                    </p>
+                                  </div>
+                                  <StatusIcon status={tx.status} />
+                                </div>
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="truncate text-xs text-zinc-500">
+                                    {tx.makerName || "—"}
+                                  </span>
+                                  <TransferAmount
+                                    compact
+                                    className="text-right"
+                                    amount={tx.amount}
+                                    showPlaces={false}
+                                    leg={
+                                      tx.direction === "income" ? "in" : "out"
+                                    }
+                                  />
+                                </div>
+                              </div>
+                            ))
+                          : null}
+                      </div>
                     );
                   })}
                 </div>

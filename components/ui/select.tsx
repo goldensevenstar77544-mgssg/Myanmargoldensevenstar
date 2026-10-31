@@ -36,7 +36,7 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "relative z-50 max-h-[min(24rem,var(--radix-select-content-available-height))] min-w-[8rem] overflow-hidden rounded-md border border-zinc-200 bg-white text-zinc-950 shadow-md",
+        "relative z-50 max-h-[min(24rem,var(--radix-select-content-available-height))] min-w-[8rem] max-w-[min(28rem,calc(100vw-1.5rem))] overflow-hidden rounded-md border border-zinc-200 bg-white text-zinc-950 shadow-md",
         position === "popper" && "translate-y-1",
         className
       )}
@@ -47,7 +47,7 @@ const SelectContent = React.forwardRef<
         className={cn(
           "max-h-[inherit] overflow-y-auto p-1",
           position === "popper" &&
-            "w-full min-w-[var(--radix-select-trigger-width)]"
+            "w-full min-w-[var(--radix-select-trigger-width)] max-w-[min(28rem,calc(100vw-1.5rem))]"
         )}
       >
         {children}
@@ -64,7 +64,7 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-zinc-100 data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex w-full cursor-default select-none items-center overflow-hidden rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-zinc-100 data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     {...props}
@@ -75,7 +75,7 @@ const SelectItem = React.forwardRef<
       </SelectPrimitive.ItemIndicator>
     </span>
     <SelectPrimitive.ItemText asChild>
-      <span className="w-full min-w-0">{children}</span>
+      <span className="block min-w-0 flex-1 overflow-hidden">{children}</span>
     </SelectPrimitive.ItemText>
   </SelectPrimitive.Item>
 ));
