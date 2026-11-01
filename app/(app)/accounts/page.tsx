@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AccountsHero } from "@/components/accounts-hero";
 import { useAuth } from "@/components/auth-provider";
@@ -15,6 +15,11 @@ import {
   Card,
   CardContent,
 } from "@/components/ui/card";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Table,
   TableBody,
@@ -40,15 +45,107 @@ import {
 import { createAccount, listAccounts, updateAccount } from "@/lib/firebase/firestore";
 import { canManageMasterData } from "@/lib/permissions";
 import type { Account, AccountType } from "@/lib/types";
-import { formatAccountLabel, formatMMK } from "@/lib/utils";
+import { cn, formatAccountLabel, formatMMK } from "@/lib/utils";
 import { useLoadOnMount } from "@/lib/use-load-on-mount";
-import { Plus } from "lucide-react";
+import { useMinWidth } from "@/lib/use-min-width";
+import { Info, Landmark, Plus } from "lucide-react";
 import { MobileFab, MobileFabStack } from "@/components/mobile-fab";
 
+function accountPrimaryLabel(account: Account): string {
+  if (account.type === "bank") {
+    return account.bankName?.trim() || account.name;
+  }
+  return account.name;
+}
+
+function accountNumberLabel(account: Account): string {
+  if (account.type === "cash") return "—";
+  return account.accountNumber?.trim() || "—";
+}
+
+function accountNameLabel(account: Account): string {
+  return account.name?.trim() || "—";
+}
+
+function BankWithBranchDetails({
+  account,
+  className,
+}: {
+  account: Account;
+  className?: string;
+}) {
+  const label = accountPrimaryLabel(account);
+  const branch = account.bankBranch?.trim();
+  const hasBranch = account.type === "bank" && Boolean(branch);
+
+  if (!hasBranch) {
+    return (
+      <span
+        className={cn(
+          "block max-w-full truncate font-medium text-zinc-900",
+          className
+        )}
+      >
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Branch details: ${label}`}
+          className={cn(
+            "inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-100",
+            className
+          )}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="min-w-0 truncate">{label}</span>
+          <Info className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        side="bottom"
+        className="w-56 px-3 py-2.5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="space-y-2">
+          <div className="flex items-start gap-2">
+            <Landmark
+              className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500"
+              aria-hidden
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Bank
+              </p>
+              <p className="truncate text-sm font-semibold text-zinc-950">
+                {label}
+              </p>
+            </div>
+          </div>
+          <div className="border-t border-zinc-100 pt-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Branch
+            </p>
+            <p className="truncate text-sm text-zinc-900">{branch}</p>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function AccountsPage() {
+  const router = useRouter();
   const { profile } = useAuth();
   const confirm = useConfirm();
   const canManage = canManageMasterData(profile);
+  const { matches: isDesktop, ready: layoutReady } = useMinWidth(768);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -186,7 +283,7 @@ export default function AccountsPage() {
   }
 
   return (
-    <div className="space-y-6 pb-20 md:pb-0">
+    <div className="space-y-4 pb-20 sm:space-y-6 md:pb-0">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -227,78 +324,166 @@ export default function AccountsPage() {
           ) : accounts.length === 0 ? (
             <p className="px-4 py-6 text-sm text-zinc-500">No accounts found.</p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10">#</TableHead>
-                  <TableHead className="sticky left-0 z-10 bg-zinc-50">
-                    Bank / Account
-                  </TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Details</TableHead>
-                  <TableHead>Opening</TableHead>
-                  <TableHead>Current</TableHead>
-                  <TableHead>Pending</TableHead>
-                  <TableHead>Approved</TableHead>
-                  <TableHead>Status</TableHead>
-                  {canManage && <TableHead className="text-right">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {accounts.map((account, index) => (
-                  <TableRow key={account.id}>
-                    <TableCell className="tabular-nums text-zinc-500">
-                      {index + 1}
-                    </TableCell>
-                    <TableCell className="sticky left-0 z-10 bg-white font-medium">
-                      <Link
-                        href={`/accounts/${account.id}`}
-                        className="text-zinc-900 underline-offset-4 hover:underline"
+            <>
+              {!layoutReady ? (
+                <LoadingState variant="page" />
+              ) : isDesktop ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10">#</TableHead>
+                      <TableHead>Account</TableHead>
+                      <TableHead>Account name</TableHead>
+                      <TableHead>Account number</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Opening</TableHead>
+                      <TableHead>Current</TableHead>
+                      <TableHead>Pending</TableHead>
+                      <TableHead>Approved</TableHead>
+                      <TableHead>Status</TableHead>
+                      {canManage && (
+                        <TableHead className="text-right">Actions</TableHead>
+                      )}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {accounts.map((account, index) => (
+                      <TableRow
+                        key={account.id}
+                        className="cursor-pointer"
+                        onClick={() => router.push(`/accounts/${account.id}`)}
                       >
-                        {account.type === "bank"
-                          ? account.bankName?.trim() || account.name
-                          : account.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="capitalize">{account.type}</TableCell>
-                    <TableCell className="text-zinc-500">
-                      {account.type === "bank"
-                        ? [account.name, account.accountNumber, account.bankBranch]
-                            .map((v) => v?.trim())
-                            .filter(Boolean)
-                            .join(" · ") || "—"
-                        : "Cash in hand"}
-                    </TableCell>
-                    <TableCell>{formatMMK(account.openingBalance)}</TableCell>
-                    <TableCell className="font-medium">
-                      {formatMMK(account.currentBalance)}
-                    </TableCell>
-                    <TableCell>{account.pendingCount}</TableCell>
-                    <TableCell>{account.approvedCount}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          account.status === "active" ? "success" : "secondary"
+                        <TableCell className="tabular-nums text-zinc-500">
+                          {index + 1}
+                        </TableCell>
+                        <TableCell>
+                          <BankWithBranchDetails account={account} />
+                        </TableCell>
+                        <TableCell className="max-w-[12rem] truncate">
+                          {accountNameLabel(account)}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs tabular-nums">
+                          {accountNumberLabel(account)}
+                        </TableCell>
+                        <TableCell className="capitalize">
+                          {account.type}
+                        </TableCell>
+                        <TableCell className="tabular-nums">
+                          {formatMMK(account.openingBalance)}
+                        </TableCell>
+                        <TableCell className="font-medium tabular-nums">
+                          {formatMMK(account.currentBalance)}
+                        </TableCell>
+                        <TableCell className="tabular-nums">
+                          {account.pendingCount}
+                        </TableCell>
+                        <TableCell className="tabular-nums">
+                          {account.approvedCount}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              account.status === "active"
+                                ? "success"
+                                : "secondary"
+                            }
+                          >
+                            {account.status}
+                          </Badge>
+                        </TableCell>
+                        {canManage && (
+                          <TableCell className="text-right">
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEdit(account);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="divide-y divide-zinc-100">
+                  {accounts.map((account) => (
+                    <div
+                      key={account.id}
+                      role="link"
+                      tabIndex={0}
+                      className="block cursor-pointer space-y-2 px-4 py-3 transition-colors hover:bg-zinc-50 active:bg-zinc-100"
+                      onClick={() => router.push(`/accounts/${account.id}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          router.push(`/accounts/${account.id}`);
                         }
-                      >
-                        {account.status}
-                      </Badge>
-                    </TableCell>
-                    {canManage && (
-                      <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="xs"
-                          onClick={() => openEdit(account)}
-                        >
-                          Edit
-                        </Button>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <BankWithBranchDetails account={account} />
+                          {account.type === "bank" &&
+                          account.name?.trim() &&
+                          account.name.trim() !==
+                            accountPrimaryLabel(account) ? (
+                            <p className="truncate text-xs text-zinc-500">
+                              {account.name.trim()}
+                            </p>
+                          ) : null}
+                          {account.type === "bank" &&
+                          account.accountNumber?.trim() ? (
+                            <p className="truncate font-mono text-xs text-zinc-500">
+                              {account.accountNumber.trim()}
+                            </p>
+                          ) : null}
+                          <p className="truncate text-xs capitalize text-zinc-500">
+                            {account.type}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Badge
+                            variant={
+                              account.status === "active"
+                                ? "success"
+                                : "secondary"
+                            }
+                          >
+                            {account.status}
+                          </Badge>
+                          {canManage && (
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEdit(account);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="truncate text-xs text-zinc-500">
+                          {account.pendingCount} pending ·{" "}
+                          {account.approvedCount} approved
+                        </span>
+                        <span className="text-sm font-semibold tabular-nums text-zinc-900">
+                          {formatMMK(account.currentBalance)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
