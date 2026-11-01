@@ -53,6 +53,7 @@ import { emptyBucket, sumBuckets } from "@/lib/summaries";
 import {
   canCreateTransaction,
   isAdmin,
+  isMaker,
 } from "@/lib/permissions";
 import type {
   Account,
@@ -69,7 +70,8 @@ const CHART_TX_PAGE_SIZE = 200;
 
 async function listAllApprovedTransactionsInRange(
   dateFrom: string,
-  dateTo: string
+  dateTo: string,
+  makerId?: string
 ): Promise<Transaction[]> {
   const items: Transaction[] = [];
   let cursor: PageCursor | null = null;
@@ -80,6 +82,7 @@ async function listAllApprovedTransactionsInRange(
       dateTo,
       pageSize: CHART_TX_PAGE_SIZE,
       cursor,
+      makerId,
     });
     items.push(...page.items);
     if (!page.nextCursor) break;
@@ -289,6 +292,8 @@ export default function DashboardPage() {
     };
   }, [loading, monthsCacheKey, period, year]);
 
+  const makerId = isMaker(profile) ? profile.id : undefined;
+
   useEffect(() => {
     if (loading) return;
     let cancelled = false;
@@ -297,6 +302,7 @@ export default function DashboardPage() {
       pageSize: 8,
       dateFrom: bounds.start ?? undefined,
       dateTo: bounds.end ?? undefined,
+      makerId,
     })
       .then((page) => {
         if (!cancelled) setRecent(page.items);
@@ -311,7 +317,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [bounds.start, bounds.end, loading]);
+  }, [bounds.start, bounds.end, loading, makerId]);
 
   useEffect(() => {
     if (loading) return;
@@ -322,7 +328,7 @@ export default function DashboardPage() {
     }
     let cancelled = false;
     setMonthTxLoading(true);
-    listAllApprovedTransactionsInRange(bounds.start, bounds.end)
+    listAllApprovedTransactionsInRange(bounds.start, bounds.end, makerId)
       .then((items) => {
         if (!cancelled) setMonthTransactions(items);
       })
@@ -339,7 +345,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [bounds.end, bounds.start, loading, period]);
+  }, [bounds.end, bounds.start, loading, makerId, period]);
 
   const periodSummary = useMemo(() => {
     if (period === "all") {

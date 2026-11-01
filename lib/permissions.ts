@@ -75,7 +75,7 @@ export function canAccessAppPath(
   }
 
   if (pathname === "/" || pathname === "") {
-    return isAdmin(user);
+    return true;
   }
   if (pathMatches(pathname, "/settings")) {
     return isAdmin(user);
@@ -112,10 +112,7 @@ export function canAccessAppPath(
   return false;
 }
 
-export function homePathForRole(user: AppUser | null | undefined): string {
-  if (isAdmin(user)) return "/";
-  if (isApprover(user)) return "/approvals";
-  if (isMaker(user) || isChecker(user)) return "/transactions";
+export function homePathForRole(_user: AppUser | null | undefined): string {
   return "/";
 }
 
