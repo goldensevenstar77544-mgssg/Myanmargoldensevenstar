@@ -43,6 +43,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createAccount, listAccounts, updateAccount } from "@/lib/firebase/firestore";
+import { invalidateAccountsCache } from "@/lib/firebase/master-data-cache";
 import { canManageMasterData } from "@/lib/permissions";
 import type { Account, AccountType } from "@/lib/types";
 import { cn, formatAccountLabel, formatMMK } from "@/lib/utils";
@@ -50,6 +51,34 @@ import { useLoadOnMount } from "@/lib/use-load-on-mount";
 import { useMinWidth } from "@/lib/use-min-width";
 import { Info, Landmark, Plus } from "lucide-react";
 import { MobileFab, MobileFabStack } from "@/components/mobile-fab";
+
+async function parseApiJson(
+  res: Response,
+  fallback: string
+): Promise<{ error?: string }> {
+  const raw = await res.text();
+  if (!raw) {
+    if (!res.ok) {
+      throw new Error(`${fallback} (HTTP ${res.status}). Empty response.`);
+    }
+    return {};
+  }
+  try {
+    return JSON.parse(raw) as { error?: string };
+  } catch {
+    throw new Error(
+      `${fallback} (HTTP ${res.status}). Server returned non-JSON.`
+    );
+  }
+}
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  if (/did not match the expected pattern/i.test(message)) {
+    return `${fallback}. Check FIREBASE_ADMIN_* env on the host.`;
+  }
+  return message;
+}
 
 function accountPrimaryLabel(account: Account): string {
   if (account.type === "bank") {
@@ -142,7 +171,7 @@ function BankWithBranchDetails({
 
 export default function AccountsPage() {
   const router = useRouter();
-  const { profile } = useAuth();
+  const { profile, firebaseUser } = useAuth();
   const confirm = useConfirm();
   const canManage = canManageMasterData(profile);
   const { matches: isDesktop, ready: layoutReady } = useMinWidth(768);
@@ -158,6 +187,7 @@ export default function AccountsPage() {
   const [bankAddress, setBankAddress] = useState("");
   const [openingBalance, setOpeningBalance] = useState("0");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -279,6 +309,43 @@ export default function AccountsPage() {
     } catch (error) {
       console.error(error);
       toast.error("Could not update status");
+    }
+  }
+
+  async function onDelete(account: Account) {
+    if (!firebaseUser) return;
+    const ok = await confirm({
+      title: "Delete this account?",
+      description: `Permanently delete “${formatAccountLabel(account)}”? This cannot be undone. Accounts with transactions cannot be deleted — deactivate them instead.`,
+      confirmLabel: "Delete account",
+      variant: "destructive",
+    });
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      const token = await firebaseUser.getIdToken();
+      const res = await fetch(`/api/accounts/${account.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await parseApiJson(res, "Delete account failed");
+      if (!res.ok) {
+        throw new Error(
+          data.error || `Failed to delete account (HTTP ${res.status})`
+        );
+      }
+      toast.success("Account deleted");
+      setOpen(false);
+      invalidateAccountsCache();
+      await load();
+    } catch (error) {
+      console.error(error);
+      toast.error(apiErrorMessage(error, "Failed to delete account"));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -577,35 +644,70 @@ export default function AccountsPage() {
                 </div>
               )}
               {editing && (
-                <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-zinc-900">Status</p>
-                      <p className="text-xs text-zinc-500">
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-zinc-900">
+                          Status
+                        </p>
+                        <p className="text-xs text-zinc-500">
+                          {editing.status === "active"
+                            ? "Active — available for new transactions."
+                            : "Inactive — hidden from new transactions."}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant={
+                          editing.status === "active"
+                            ? "destructive"
+                            : "secondary"
+                        }
+                        size="sm"
+                        onClick={() => toggleStatus(editing)}
+                      >
                         {editing.status === "active"
-                          ? "Active — available for new transactions."
-                          : "Inactive — hidden from new transactions."}
-                      </p>
+                          ? "Deactivate"
+                          : "Activate"}
+                      </Button>
                     </div>
-                    <Button
-                      type="button"
-                      variant={
-                        editing.status === "active" ? "destructive" : "secondary"
-                      }
-                      size="sm"
-                      onClick={() => toggleStatus(editing)}
-                    >
-                      {editing.status === "active" ? "Deactivate" : "Activate"}
-                    </Button>
+                  </div>
+                  <div className="rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-zinc-900">
+                          Delete account
+                        </p>
+                        <p className="text-xs text-zinc-500">
+                          Permanent. Blocked if this account has any
+                          transactions.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={deleting || saving}
+                        onClick={() => void onDelete(editing)}
+                      >
+                        {deleting ? "Deleting…" : "Delete"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               )}
             </div>
             <DialogFooter className="mt-6">
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setOpen(false)}
+                disabled={deleting}
+              >
                 Cancel
               </Button>
-              <Button type="submit" disabled={saving}>
+              <Button type="submit" disabled={saving || deleting}>
                 {saving ? "Saving…" : "Save"}
               </Button>
             </DialogFooter>

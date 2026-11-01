@@ -244,6 +244,9 @@ function summaryFor(log: AuditLog): string {
     return log.description?.trim() || "Submitted for review";
   }
   if (log.action === "deleted") {
+    if (log.entityType === "account") {
+      return log.description?.trim() || "Account deleted";
+    }
     return log.description?.trim() || "User deleted";
   }
   return log.description?.trim() || "—";
@@ -252,6 +255,9 @@ function summaryFor(log: AuditLog): string {
 function EntityTypeBadge({ log }: { log: AuditLog }) {
   if (log.entityType === "user") {
     return <Badge variant="outline">User</Badge>;
+  }
+  if (log.entityType === "account") {
+    return <Badge variant="outline">Account</Badge>;
   }
   if (isTransferAudit(log)) {
     return <Badge variant="outline">Transfer</Badge>;
@@ -269,6 +275,13 @@ function EntityLinks({ logs }: { logs: AuditLog[] }) {
     return (
       <Button asChild variant="outline" size="xs">
         <Link href="/users">Users</Link>
+      </Button>
+    );
+  }
+  if (unique[0]?.entityType === "account") {
+    return (
+      <Button asChild variant="outline" size="xs">
+        <Link href="/accounts">Accounts</Link>
       </Button>
     );
   }
@@ -529,7 +542,9 @@ export default function AuditPage() {
                     ? "All"
                     : entityType === "transaction"
                       ? "Transaction"
-                      : "User"
+                      : entityType === "account"
+                        ? "Account"
+                        : "User"
                 }
                 className="h-9 min-w-0 px-2.5 text-xs sm:h-10 sm:px-3 sm:text-sm [&>span]:truncate"
               >
@@ -538,6 +553,7 @@ export default function AuditPage() {
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="transaction">Transaction</SelectItem>
+                <SelectItem value="account">Account</SelectItem>
                 <SelectItem value="user">User</SelectItem>
               </SelectContent>
             </Select>

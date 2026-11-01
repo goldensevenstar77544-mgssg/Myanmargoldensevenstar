@@ -138,7 +138,7 @@ export type AuditAction =
   | "rejected"
   | "deleted";
 
-export type AuditEntityType = "transaction" | "user";
+export type AuditEntityType = "transaction" | "user" | "account";
 
 export interface AuditChange {
   field: string;
