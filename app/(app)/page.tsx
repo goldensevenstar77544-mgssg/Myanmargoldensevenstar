@@ -292,7 +292,7 @@ export default function DashboardPage() {
     };
   }, [loading, monthsCacheKey, period, year]);
 
-  const makerId = isMaker(profile) ? profile.id : undefined;
+  const makerId = isMaker(profile) ? profile?.id : undefined;
 
   useEffect(() => {
     if (loading) return;
